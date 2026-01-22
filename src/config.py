@@ -46,6 +46,7 @@ class Config:
     # Database
     CACHE_DB_PATH: str = os.getenv("CACHE_DB_PATH", str(DATA_DIR / "cache.db"))
     CACHE_TTL_SECONDS: int = int(os.getenv("CACHE_TTL_SECONDS", "3600"))
+    NEWS_CACHE_TTL: int = int(os.getenv("NEWS_CACHE_TTL", "1800"))  # 30 minutes
     
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
