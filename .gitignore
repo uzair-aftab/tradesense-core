@@ -1,0 +1,133 @@
+# ============================================
+# TradeSense - Git Ignore Configuration
+# ============================================
+
+# -----------------
+# Python
+# -----------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# -----------------
+# Virtual Environments
+# -----------------
+venv/
+.venv/
+ENV/
+env/
+.env
+
+# -----------------
+# IDE / Editor
+# -----------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-workspace
+*.sublime-project
+
+# -----------------
+# Jupyter Notebooks
+# -----------------
+.ipynb_checkpoints/
+*.ipynb
+
+# -----------------
+# Testing
+# -----------------
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# -----------------
+# Environment Variables & Secrets
+# -----------------
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+
+# -----------------
+# Data & Cache
+# -----------------
+data/cache.db
+data/*.db
+*.sqlite3
+*.db
+cache/
+*.cache
+
+# -----------------
+# Logs
+# -----------------
+logs/
+*.log
+
+# -----------------
+# ML Models (large files)
+# -----------------
+models/*.pt
+models/*.pth
+models/*.pkl
+models/*.joblib
+*.onnx
+
+# -----------------
+# HuggingFace Cache
+# -----------------
+.cache/
+huggingface/
+
+# -----------------
+# MkDocs Build
+# -----------------
+site/
+
+# -----------------
+# OS Files
+# -----------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# -----------------
+# Temporary Files
+# -----------------
+tmp/
+temp/
+*.tmp
+*.bak
+
+# -----------------
+# Coverage Reports
+# -----------------
+coverage.xml
+*.cover
+.hypothesis/
