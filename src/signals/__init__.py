@@ -1,5 +1,21 @@
 """
-TradeSense Signals Package
+TradeSense Signals Module
 
-Contains signal generator, adaptive thresholds, and TP/SL calculator.
+Provides trading signal generation and management.
 """
+
+from src.signals.generator import (
+    SignalGenerator,
+    TradingSignal,
+    SignalType,
+    SignalWeights,
+    signal_generator,
+)
+
+__all__ = [
+    "SignalGenerator",
+    "TradingSignal",
+    "SignalType",
+    "SignalWeights",
+    "signal_generator",
+]
