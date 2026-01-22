@@ -1,0 +1,42 @@
+# ============================================
+# TradeSense - Trading Signal Scanner
+# Python 3.12 | CUDA 12.4 | Windows 11
+# ============================================
+
+# Data Sources
+yfinance>=0.2.36
+finnhub-python>=2.4.19
+
+# Technical Analysis
+pandas-ta>=0.3.14b0
+
+# Backtesting
+vectorbt>=0.26.0
+
+# Sentiment Analysis (NLP)
+transformers>=4.40.0
+sentence-transformers>=2.5.0
+praw>=7.7.1
+requests>=2.31.0
+
+# ML/AI
+scikit-learn>=1.4.0
+xgboost>=2.0.0
+
+# Database
+sqlalchemy>=2.0.0
+
+# UI
+streamlit>=1.31.0
+plotly>=5.18.0
+
+# Scheduling
+apscheduler>=3.10.4
+
+# Core
+pandas>=2.2.0
+numpy>=1.26.0
+python-dotenv>=1.0.0
+
+# Note: PyTorch installed separately with CUDA support
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
