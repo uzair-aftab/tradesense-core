@@ -8,14 +8,21 @@ into actionable trading signals with targets.
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
+import os
 import numpy as np
 
 from src.utils.logger import get_logger
 from src.data import stock_fetcher, crypto_fetcher, watchlist
-from src.analysis import technical_signal_generator, support_resistance
+from src.analysis import (
+    technical_signal_generator, 
+    support_resistance,
+    adaptive_thresholds
+)
+from src.analysis.adaptive import AdaptiveThresholds
 from src.data.fetcher_fundamentals import fundamentals_fetcher
 from src.data.fetcher_options import options_fetcher
 from src.sentiment import sentiment_aggregator
+from src.ml import FeatureEngineer, signal_model
 from src.config import config
 
 logger = get_logger(__name__)
@@ -48,6 +55,7 @@ class TradingSignal:
     fundamental_score: float = 0.0
     sentiment_score: float = 0.0
     options_score: float = 0.0
+    ml_score: float = 0.5  # ML model prediction (neutral default)
     
     # Supporting details
     reasons: List[str] = field(default_factory=list)
@@ -75,10 +83,11 @@ class TradingSignal:
 @dataclass
 class SignalWeights:
     """Weights for combining different signal sources."""
-    technical: float = 0.35
-    fundamental: float = 0.25
-    sentiment: float = 0.25
-    options: float = 0.15
+    technical: float = 0.30
+    fundamental: float = 0.20
+    sentiment: float = 0.20
+    options: float = 0.10
+    ml: float = 0.20  # ML model weight
 
 
 class SignalGenerator:
@@ -143,14 +152,28 @@ class SignalGenerator:
         current_price = df["Close"].iloc[-1]
         reasons = []
         
-        # Technical Analysis
-        tech_result = technical_signal_generator.analyze(df)
+        # Adaptive Thresholds - Detect Regime
+        regime_info = adaptive_thresholds.detect_regime(df)
+        regime = regime_info["regime"]
+        logger.info(f"Market Regime for {ticker}: {regime} (ATR={regime_info['atr_percent']:.2f}%)")
+        
+        # Get dynamic thresholds
+        rsi_thresh = adaptive_thresholds.get_rsi_thresholds(regime)
+        thresholds_overrides = {
+            "rsi_oversold": rsi_thresh["oversold"],
+            "rsi_overbought": rsi_thresh["overbought"]
+        }
+        
+        # Technical Analysis with adaptive thresholds
+        tech_result = technical_signal_generator.analyze(df, thresholds=thresholds_overrides)
         technical_score = tech_result.get("technical_score", 0.5)
         
         if tech_result.get("composite_signal") is True:
             reasons.append(f"Technical: {tech_result.get('buy_signals', 0)}/3 buy signals")
         elif tech_result.get("composite_signal") is False:
             reasons.append(f"Technical: {tech_result.get('sell_signals', 0)}/3 sell signals")
+            
+        reasons.append(f"Regime: {regime} Volatility")
         
         # Support/Resistance
         sr_result = support_resistance.find_levels(df)
@@ -205,12 +228,28 @@ class SignalGenerator:
             except Exception as e:
                 logger.warning(f"Options analysis failed for {ticker}: {e}")
         
+        # ML Model Prediction
+        ml_score = 0.5  # Neutral default
+        try:
+            if signal_model.is_trained or os.path.exists(signal_model.model_path):
+                # Generate features for current state
+                feature_engineer = FeatureEngineer()
+                features_df = feature_engineer.calculate_features(df, include_targets=False)
+                if not features_df.empty:
+                    # Get latest row for prediction
+                    X_latest = features_df[feature_engineer.feature_columns].iloc[[-1]]
+                    ml_score = signal_model.predict_proba(X_latest)[0]
+                    reasons.append(f"ML Model: {ml_score:.0%} bullish probability")
+        except Exception as e:
+            logger.warning(f"ML prediction failed for {ticker}: {e}")
+        
         # Calculate weighted composite score
         composite_score = (
             technical_score * self.weights.technical +
             fundamental_score * self.weights.fundamental +
             sentiment_score * self.weights.sentiment +
-            options_score * self.weights.options
+            options_score * self.weights.options +
+            ml_score * self.weights.ml
         )
         
         # Determine signal type
@@ -228,9 +267,11 @@ class SignalGenerator:
         agreement_factor = 1 - min(score_variance * 2, 0.5)  # Lower variance = higher agreement
         confidence = abs(composite_score - 0.5) * 2 * agreement_factor
         
-        # Calculate targets
+        # Calculate targets with adaptive multiplier
+        sl_multiplier = adaptive_thresholds.get_stop_loss_multiplier(regime)
+        
         take_profit, stop_loss = self._calculate_targets(
-            current_price, signal_type, sr_result, df
+            current_price, signal_type, sr_result, df, sl_multiplier
         )
         
         return TradingSignal(
@@ -244,6 +285,7 @@ class SignalGenerator:
             fundamental_score=fundamental_score,
             sentiment_score=sentiment_score,
             options_score=options_score,
+            ml_score=ml_score,
             reasons=reasons,
             technical_details=tech_result,
             fundamental_details=fundamental_details,
@@ -255,7 +297,8 @@ class SignalGenerator:
         entry_price: float,
         signal_type: SignalType,
         sr_levels: Dict,
-        df
+        df,
+        sl_multiplier: float = 1.5
     ) -> Tuple[Optional[float], Optional[float]]:
         """
         Calculate take profit and stop loss targets.
@@ -277,12 +320,12 @@ class SignalGenerator:
             else:
                 take_profit = entry_price + (atr * 2)
             
-            # Stop loss at support or 1.5x ATR
+            # Stop loss at support or dynamic ATR multiple
             support = sr_levels.get("nearest_support")
             if support and support < entry_price:
                 stop_loss = support
             else:
-                stop_loss = entry_price - (atr * 1.5)
+                stop_loss = entry_price - (atr * sl_multiplier)
         else:  # SELL
             # Take profit at support or 2x ATR down
             support = sr_levels.get("nearest_support")
@@ -291,12 +334,12 @@ class SignalGenerator:
             else:
                 take_profit = entry_price - (atr * 2)
             
-            # Stop loss at resistance or 1.5x ATR up
+            # Stop loss at resistance or dynamic ATR multiple
             resistance = sr_levels.get("nearest_resistance")
             if resistance and resistance > entry_price:
                 stop_loss = resistance
             else:
-                stop_loss = entry_price + (atr * 1.5)
+                stop_loss = entry_price + (atr * sl_multiplier)
         
         return take_profit, stop_loss
     

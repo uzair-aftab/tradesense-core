@@ -61,18 +61,17 @@ class RSIIndicator:
         df["RSI"] = ta.rsi(df["Close"], length=self.period)
         return df
     
-    def get_signal(self, df: pd.DataFrame) -> Dict[str, Any]:
+    def get_signal(self, df: pd.DataFrame, oversold: int = None, overbought: int = None) -> Dict[str, Any]:
         """
-        Get RSI signal for trading.
+        Get RSI signal for trading with optional dynamic thresholds.
         
         Args:
             df: DataFrame with RSI column
+            oversold: Override oversold threshold
+            overbought: Override overbought threshold
             
         Returns:
-            Dict with:
-                - signal: True (buy), False (sell), None (hold)
-                - rsi: Current RSI value
-                - condition: Description of signal
+            Dict with signal details
         """
         if "RSI" not in df.columns:
             df = self.calculate(df)
@@ -81,18 +80,22 @@ class RSIIndicator:
         
         if pd.isna(current_rsi):
             return {"signal": None, "rsi": None, "condition": "Insufficient data"}
+            
+        # Use provided thresholds or defaults
+        thresh_os = oversold if oversold is not None else self.oversold
+        thresh_ob = overbought if overbought is not None else self.overbought
         
-        if current_rsi <= self.oversold:
+        if current_rsi <= thresh_os:
             return {
                 "signal": True,
                 "rsi": float(current_rsi),
-                "condition": f"Oversold (RSI={current_rsi:.1f} <= {self.oversold})"
+                "condition": f"Oversold (RSI={current_rsi:.1f} <= {thresh_os})"
             }
-        elif current_rsi >= self.overbought:
+        elif current_rsi >= thresh_ob:
             return {
                 "signal": False,
                 "rsi": float(current_rsi),
-                "condition": f"Overbought (RSI={current_rsi:.1f} >= {self.overbought})"
+                "condition": f"Overbought (RSI={current_rsi:.1f} >= {thresh_ob})"
             }
         else:
             return {
@@ -437,21 +440,16 @@ class TechnicalSignalGenerator:
         df = self.volume.calculate(df)
         return df
     
-    def analyze(self, df: pd.DataFrame) -> Dict[str, Any]:
+    def analyze(self, df: pd.DataFrame, thresholds: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Analyze price data and generate signals.
         
         Args:
             df: DataFrame with OHLCV data
+            thresholds: Optional dynamic thresholds (e.g. {'rsi_oversold': 20})
             
         Returns:
-            Dict with:
-                - rsi_signal: RSI signal details
-                - macd_signal: MACD signal details
-                - bb_signal: Bollinger Bands signal
-                - volume_signal: Volume signal
-                - composite_signal: Combined signal
-                - technical_score: Score from 0 to 1
+            Dict with signals and scores
         """
         if len(df) < 30:
             return {
@@ -463,8 +461,13 @@ class TechnicalSignalGenerator:
         # Calculate all indicators
         df = self.calculate_all(df)
         
-        # Get individual signals
-        rsi_signal = self.rsi.get_signal(df)
+        # Get individual signals with optional overrides
+        thresholds = thresholds or {}
+        rsi_signal = self.rsi.get_signal(
+            df, 
+            oversold=thresholds.get("rsi_oversold"),
+            overbought=thresholds.get("rsi_overbought")
+        )
         macd_signal = self.macd.get_signal(df)
         bb_signal = self.bb.get_signal(df)
         volume_signal = self.volume.get_signal(df)
