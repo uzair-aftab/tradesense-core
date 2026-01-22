@@ -188,6 +188,29 @@ st.markdown("""
         background: var(--accent-purple) !important;
         color: white !important;
     }
+    
+    /* Responsive Design */
+    @media (max-width: 768px) {
+        .metric-value { font-size: 20px; }
+        .metric-label { font-size: 10px; }
+        .glass-card { padding: 12px; }
+        .signal-card h2 { font-size: 24px; }
+    }
+    
+    /* Settings Panel */
+    .settings-panel {
+        background: var(--bg-card);
+        border-radius: 12px;
+        padding: 16px;
+        margin-top: 16px;
+    }
+    
+    /* Expander Styling */
+    .streamlit-expanderHeader {
+        background: var(--bg-card);
+        border-radius: 10px;
+        color: var(--text-primary);
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -436,6 +459,26 @@ def main():
         show_rsi = st.checkbox("RSI", value=True)
         show_macd = st.checkbox("MACD", value=True)
         show_bb = st.checkbox("Bollinger Bands", value=False)
+        
+        # Advanced Settings
+        with st.expander("🔧 Advanced Settings"):
+            chart_period = st.selectbox(
+                "Chart Period",
+                options=["1mo", "3mo", "6mo", "1y", "2y"],
+                index=2  # Default: 6mo
+            )
+            st.session_state['chart_period'] = chart_period
+            
+            st.markdown("**Indicator Parameters**")
+            rsi_length = st.slider("RSI Length", 7, 21, 14)
+            rsi_oversold = st.slider("RSI Oversold", 20, 40, 30)
+            rsi_overbought = st.slider("RSI Overbought", 60, 80, 70)
+            
+            st.session_state['rsi_params'] = {
+                'length': rsi_length,
+                'oversold': rsi_oversold,
+                'overbought': rsi_overbought
+            }
     
     # Main Content
     current_ticker = st.session_state.get('analyze_ticker', 'AAPL')
