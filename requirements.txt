@@ -12,6 +12,8 @@ pandas-ta>=0.3.14b0
 
 # Backtesting
 vectorbt>=0.26.0
+kaleido>=0.2.1
+anywidget>=0.9.0
 
 # Sentiment Analysis (NLP)
 transformers>=4.40.0

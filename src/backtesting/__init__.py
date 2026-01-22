@@ -1,5 +1,15 @@
 """
-TradeSense Backtesting Package
+TradeSense Backtesting Module
 
-Contains vectorbt-based backtesting engine.
+Provides backtesting capabilities using vectorbt.
 """
+
+from src.backtesting.engine import (
+    BacktestEngine,
+    backtest_engine,
+)
+
+__all__ = [
+    "BacktestEngine",
+    "backtest_engine",
+]

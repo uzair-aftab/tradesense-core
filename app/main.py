@@ -6,8 +6,19 @@ fundamental data, sentiment analysis, and options flow to generate
 high-confidence buy/sell signals with take profit and stop loss targets.
 """
 
+import sys
+from pathlib import Path
+
+# Add project root to Python path to ensure 'src' module is found
+PROJECT_ROOT = Path(__file__).parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
+
 import streamlit as st
+import plotly.graph_objects as go
 from datetime import datetime
+
+from src.backtesting import backtest_engine
 
 # Page configuration
 st.set_page_config(
@@ -59,7 +70,6 @@ st.markdown("""
 
 def show_dashboard():
     """Main dashboard page."""
-    st.markdown('<h1 class="main-header">📈 TradeSense</h1>', unsafe_allow_html=True)
     st.markdown("### Multi-Factor Trading Signal Scanner")
     
     # Sidebar
@@ -234,18 +244,77 @@ def show_dashboard():
                     
             except Exception as e:
                 st.error(f"Error scanning watchlist: {str(e)}")
+
+
+def show_backtest_dashboard():
+    """Backtesting dashboard tab."""
+    st.markdown("### 🧪 Strategy Backtester")
     
-    # Footer
-    st.markdown("---")
-    st.markdown(
-        f"<center><small>TradeSense v0.1.0 | Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}</small></center>",
-        unsafe_allow_html=True
-    )
+    col1, col2 = st.columns([1, 3])
+    
+    with col1:
+        st.markdown("#### Configuration")
+        ticker = st.text_input("Ticker", value="AAPL", key="bt_ticker")
+        period = st.selectbox("Period", ["3mo", "6mo", "1y", "2y", "5y"], index=2, key="bt_period")
+        
+        st.markdown("#### Strategy Params")
+        rsi_thresh = st.slider("RSI Buy Threshold", 10, 40, 30)
+        ma_fast = st.number_input("Fast MA", value=12)
+        ma_slow = st.number_input("Slow MA", value=26)
+        
+        run_bt = st.button("Run Backtest", type="primary", use_container_width=True)
+    
+    with col2:
+        if run_bt:
+            with st.spinner(f"Backtesting {ticker}..."):
+                try:
+                    results = backtest_engine.run_technical_strategy(
+                        ticker,
+                        period=period,
+                        rsi_threshold=rsi_thresh,
+                        ma_fast=ma_fast,
+                        ma_slow=ma_slow
+                    )
+                    
+                    if "error" in results:
+                        st.error(results["error"])
+                    else:
+                        # Metrics
+                        m1, m2, m3, m4 = st.columns(4)
+                        with m1:
+                            st.metric("Total Return", f"{results['total_return']:.2f}%")
+                        with m2:
+                            st.metric("Win Rate", f"{results['win_rate']:.1f}%")
+                        with m3:
+                            st.metric("Max Drawdown", f"{results['max_drawdown']:.2f}%")
+                        with m4:
+                            st.metric("Sharpe Ratio", f"{results['sharpe_ratio']:.2f}")
+                        
+                        # Plot
+                        st.markdown("#### Equity Curve")
+                        # VectorBT plots are Plotly FigureWidgets, need conversion
+                        portfolio = results["portfolio"]
+                        fig = portfolio.plot(title=f"{ticker} Strategy Performance")
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                except Exception as e:
+                    st.error(f"Backtest failed: {str(e)}")
+        else:
+            st.info("Configure settings and click 'Run Backtest' to simulate performance.")
 
 
 def main():
     """Main application entry point."""
-    show_dashboard()
+    st.markdown('<h1 class="main-header">📈 TradeSense</h1>', unsafe_allow_html=True)
+    
+    tab1, tab2 = st.tabs(["🚀 Live Scanner", "🧪 Backtester"])
+    
+    with tab1:
+        show_dashboard()
+    
+    with tab2:
+        show_backtest_dashboard()
+
 
 
 if __name__ == "__main__":
