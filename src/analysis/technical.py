@@ -267,12 +267,19 @@ class BollingerBands:
         Returns:
             Dict with signal and band values
         """
-        lower_col = f"BBL_{self.period}_{self.std_dev}"
-        mid_col = f"BBM_{self.period}_{self.std_dev}"
-        upper_col = f"BBU_{self.period}_{self.std_dev}"
-        
-        if lower_col not in df.columns:
+        # Find BB columns dynamically (pandas-ta naming varies)
+        bb_cols = [c for c in df.columns if c.startswith("BB")]
+        if not bb_cols:
             df = self.calculate(df)
+            bb_cols = [c for c in df.columns if c.startswith("BB")]
+        
+        # Find the specific columns
+        lower_col = next((c for c in bb_cols if c.startswith("BBL")), None)
+        mid_col = next((c for c in bb_cols if c.startswith("BBM")), None)
+        upper_col = next((c for c in bb_cols if c.startswith("BBU")), None)
+        
+        if not all([lower_col, mid_col, upper_col]):
+            return {"signal": None, "condition": "BB columns not found"}
         
         current_price = df["Close"].iloc[-1]
         lower_band = df[lower_col].iloc[-1]
