@@ -1,26 +1,33 @@
 """
-TradeSense - Multi-Factor Trading Signal Scanner
+TradeSense Modern Dashboard
 
-A sophisticated trading application that combines technical analysis,
-fundamental data, sentiment analysis, and options flow to generate
-high-confidence buy/sell signals with take profit and stop loss targets.
+A complete redesign with:
+- Dark theme with glassmorphism
+- Interactive candlestick charts with indicator overlays
+- Real-time prediction vs actual visualization
+- Modern signal action cards
 """
-
-import sys
-from pathlib import Path
-
-# Add project root to Python path to ensure 'src' module is found
-PROJECT_ROOT = Path(__file__).parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.append(str(PROJECT_ROOT))
 
 import streamlit as st
 import plotly.graph_objects as go
-from datetime import datetime
+from plotly.subplots import make_subplots
+import pandas as pd
+import numpy as np
+import sys
+import os
 
-from src.backtesting import backtest_engine
+# Add project root to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Page configuration
+from src.data import stock_fetcher, crypto_fetcher, watchlist
+from src.signals import signal_generator
+from src.ml import FeatureEngineer, signal_model
+
+
+# ============================================================================
+# PAGE CONFIG & CUSTOM CSS
+# ============================================================================
+
 st.set_page_config(
     page_title="TradeSense",
     page_icon="📈",
@@ -28,293 +35,472 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for professional look
+# Modern Dark Theme CSS
 st.markdown("""
 <style>
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: 700;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        text-align: center;
-        padding: 1rem 0;
+    /* Import Google Font */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    
+    /* Root Variables */
+    :root {
+        --bg-primary: #0f0f1a;
+        --bg-secondary: #1a1a2e;
+        --bg-card: rgba(30, 30, 50, 0.7);
+        --accent-purple: #7c3aed;
+        --accent-blue: #3b82f6;
+        --accent-green: #10b981;
+        --accent-red: #ef4444;
+        --text-primary: #ffffff;
+        --text-secondary: #a0a0b0;
+        --border-color: rgba(255, 255, 255, 0.1);
     }
-    .signal-card {
-        background: linear-gradient(135deg, rgba(102, 126, 234, 0.1), rgba(118, 75, 162, 0.1));
-        border-radius: 12px;
+    
+    /* Global Styles */
+    .stApp {
+        background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+        font-family: 'Inter', sans-serif;
+    }
+    
+    /* Hide Streamlit Branding */
+    #MainMenu, footer, header {visibility: hidden;}
+    
+    /* Glassmorphism Cards */
+    .glass-card {
+        background: var(--bg-card);
+        backdrop-filter: blur(20px);
+        border-radius: 16px;
+        border: 1px solid var(--border-color);
         padding: 20px;
-        margin: 10px 0;
-        border: 1px solid rgba(102, 126, 234, 0.3);
+        margin-bottom: 16px;
     }
-    .buy-signal {
-        background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(5, 150, 105, 0.1));
-        border-color: #10b981;
+    
+    /* Signal Cards */
+    .signal-buy {
+        background: linear-gradient(135deg, rgba(16, 185, 129, 0.2) 0%, rgba(16, 185, 129, 0.05) 100%);
+        border-left: 4px solid var(--accent-green);
     }
-    .sell-signal {
-        background: linear-gradient(135deg, rgba(239, 68, 68, 0.15), rgba(220, 38, 38, 0.1));
-        border-color: #ef4444;
+    .signal-sell {
+        background: linear-gradient(135deg, rgba(239, 68, 68, 0.2) 0%, rgba(239, 68, 68, 0.05) 100%);
+        border-left: 4px solid var(--accent-red);
     }
-    .metric-box {
-        background: rgba(30, 41, 59, 0.5);
-        border-radius: 8px;
-        padding: 15px;
+    .signal-hold {
+        background: linear-gradient(135deg, rgba(124, 58, 237, 0.2) 0%, rgba(124, 58, 237, 0.05) 100%);
+        border-left: 4px solid var(--accent-purple);
+    }
+    
+    /* Metric Cards */
+    .metric-card {
+        background: var(--bg-card);
+        backdrop-filter: blur(20px);
+        border-radius: 12px;
+        padding: 16px;
         text-align: center;
     }
-    .stProgress > div > div > div > div {
-        background: linear-gradient(135deg, #667eea, #764ba2);
+    .metric-value {
+        font-size: 28px;
+        font-weight: 700;
+        color: var(--text-primary);
+    }
+    .metric-label {
+        font-size: 12px;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+    
+    /* Watchlist Items */
+    .watchlist-item {
+        background: var(--bg-card);
+        border-radius: 10px;
+        padding: 12px;
+        margin-bottom: 8px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+    .watchlist-item:hover {
+        background: rgba(124, 58, 237, 0.2);
+        transform: translateX(4px);
+    }
+    
+    /* Score Bars */
+    .score-bar-container {
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        height: 8px;
+        margin: 8px 0;
+        overflow: hidden;
+    }
+    .score-bar {
+        height: 100%;
+        border-radius: 8px;
+        transition: width 0.5s ease;
+    }
+    
+    /* Buttons */
+    .stButton > button {
+        background: linear-gradient(135deg, var(--accent-purple) 0%, var(--accent-blue) 100%);
+        color: white;
+        border: none;
+        border-radius: 10px;
+        padding: 12px 24px;
+        font-weight: 600;
+        transition: all 0.3s ease;
+    }
+    .stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 20px rgba(124, 58, 237, 0.4);
+    }
+    
+    /* Sidebar Styling */
+    [data-testid="stSidebar"] {
+        background: var(--bg-secondary);
+        border-right: 1px solid var(--border-color);
+    }
+    
+    /* Input Fields */
+    .stTextInput > div > div > input {
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        color: var(--text-primary);
+    }
+    
+    /* Headers */
+    h1, h2, h3 {
+        color: var(--text-primary) !important;
+        font-weight: 600;
+    }
+    
+    /* Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        background: var(--bg-card);
+        border-radius: 12px;
+        padding: 4px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        color: var(--text-secondary);
+        border-radius: 8px;
+    }
+    .stTabs [aria-selected="true"] {
+        background: var(--accent-purple) !important;
+        color: white !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
 
-def show_dashboard():
-    """Main dashboard page."""
-    st.markdown("### Multi-Factor Trading Signal Scanner")
+# ============================================================================
+# CHART COMPONENTS
+# ============================================================================
+
+def create_candlestick_chart(df: pd.DataFrame, ticker: str, show_rsi: bool = True, 
+                              show_macd: bool = True, show_bb: bool = False) -> go.Figure:
+    """Create interactive candlestick chart with indicator overlays."""
     
-    # Sidebar
-    with st.sidebar:
-        st.markdown("## ⚙️ Settings")
-        
-        asset_type = st.selectbox(
-            "Asset Category",
-            ["All", "Stocks", "ETFs", "Crypto"]
+    # Determine number of rows based on indicators
+    rows = 1
+    row_heights = [0.6]
+    if show_rsi:
+        rows += 1
+        row_heights.append(0.2)
+    if show_macd:
+        rows += 1
+        row_heights.append(0.2)
+    
+    fig = make_subplots(
+        rows=rows, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.03,
+        row_heights=row_heights
+    )
+    
+    # Candlestick
+    fig.add_trace(
+        go.Candlestick(
+            x=df.index,
+            open=df['Open'],
+            high=df['High'],
+            low=df['Low'],
+            close=df['Close'],
+            name=ticker,
+            increasing_line_color='#10b981',
+            decreasing_line_color='#ef4444'
+        ),
+        row=1, col=1
+    )
+    
+    # Bollinger Bands
+    if show_bb and 'BBL_20_2.0' in df.columns:
+        fig.add_trace(go.Scatter(x=df.index, y=df['BBU_20_2.0'], name='BB Upper',
+                                  line=dict(color='rgba(124, 58, 237, 0.3)')), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['BBL_20_2.0'], name='BB Lower',
+                                  line=dict(color='rgba(124, 58, 237, 0.3)'),
+                                  fill='tonexty', fillcolor='rgba(124, 58, 237, 0.1)'), row=1, col=1)
+    
+    current_row = 2
+    
+    # RSI
+    if show_rsi:
+        import pandas_ta as ta
+        rsi = ta.rsi(df['Close'], length=14)
+        fig.add_trace(
+            go.Scatter(x=df.index, y=rsi, name='RSI', 
+                       line=dict(color='#7c3aed', width=2)),
+            row=current_row, col=1
         )
-        
-        confidence_threshold = st.slider(
-            "Min Confidence",
-            min_value=0.0,
-            max_value=1.0,
-            value=0.5,
-            step=0.1
+        # RSI levels
+        fig.add_hline(y=70, line_dash="dash", line_color="rgba(239, 68, 68, 0.5)", row=current_row, col=1)
+        fig.add_hline(y=30, line_dash="dash", line_color="rgba(16, 185, 129, 0.5)", row=current_row, col=1)
+        fig.update_yaxes(title_text="RSI", row=current_row, col=1)
+        current_row += 1
+    
+    # MACD
+    if show_macd:
+        import pandas_ta as ta
+        macd = ta.macd(df['Close'])
+        if macd is not None:
+            fig.add_trace(
+                go.Scatter(x=df.index, y=macd['MACD_12_26_9'], name='MACD',
+                           line=dict(color='#3b82f6', width=2)),
+                row=current_row, col=1
+            )
+            fig.add_trace(
+                go.Scatter(x=df.index, y=macd['MACDs_12_26_9'], name='Signal',
+                           line=dict(color='#f59e0b', width=2)),
+                row=current_row, col=1
+            )
+            colors = ['#10b981' if v > 0 else '#ef4444' for v in macd['MACDh_12_26_9']]
+            fig.add_trace(
+                go.Bar(x=df.index, y=macd['MACDh_12_26_9'], name='Histogram',
+                       marker_color=colors),
+                row=current_row, col=1
+            )
+            fig.update_yaxes(title_text="MACD", row=current_row, col=1)
+    
+    # Layout
+    fig.update_layout(
+        template='plotly_dark',
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(15,15,26,0.8)',
+        height=600,
+        margin=dict(l=50, r=50, t=30, b=30),
+        xaxis_rangeslider_visible=False,
+        showlegend=False,
+        font=dict(family="Inter", color="#a0a0b0")
+    )
+    
+    return fig
+
+
+def create_prediction_chart(df: pd.DataFrame) -> go.Figure:
+    """Create prediction vs actual price chart."""
+    
+    # Generate ML predictions for historical data
+    engineer = FeatureEngineer()
+    features_df = engineer.calculate_features(df.copy(), include_targets=False)
+    
+    if features_df.empty or not signal_model.is_trained:
+        # Fallback: show just actual prices
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name='Actual',
+                                  line=dict(color='#3b82f6', width=2)))
+        fig.update_layout(
+            template='plotly_dark',
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(15,15,26,0.8)',
+            height=200,
+            margin=dict(l=50, r=50, t=20, b=20)
         )
-        
-        st.markdown("---")
-        st.markdown("### 📊 Data Sources")
-        include_technical = st.checkbox("Technical Analysis", value=True)
-        include_fundamental = st.checkbox("Fundamental Analysis", value=True)
-        include_sentiment = st.checkbox("Sentiment Analysis", value=True)
-        include_options = st.checkbox("Options Flow", value=True)
-        
-        st.markdown("---")
-        scan_button = st.button("🔍 Scan Watchlist", type="primary", use_container_width=True)
+        return fig
     
-    # Main content
-    col1, col2, col3, col4 = st.columns(4)
+    # Get predictions
+    X = features_df[engineer.feature_columns]
+    probs = signal_model.predict_proba(X)
     
-    with col1:
-        st.metric("📈 Buy Signals", "0", delta=None)
-    with col2:
-        st.metric("📉 Sell Signals", "0", delta=None)
-    with col3:
-        st.metric("⏸️ Hold", "20", delta=None)
-    with col4:
-        st.metric("🎯 Avg Confidence", "0.0%", delta=None)
+    # Normalize price and prediction for comparison
+    close_norm = (df['Close'].loc[features_df.index] - df['Close'].min()) / (df['Close'].max() - df['Close'].min())
     
-    st.markdown("---")
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=features_df.index, y=close_norm, name='Actual (Normalized)',
+                              line=dict(color='#3b82f6', width=2)))
+    fig.add_trace(go.Scatter(x=features_df.index, y=probs, name='ML Prediction',
+                              line=dict(color='#7c3aed', width=2, dash='dash')))
     
-    # Single ticker analysis
-    st.markdown("### 🔎 Analyze Single Ticker")
+    fig.update_layout(
+        template='plotly_dark',
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(15,15,26,0.8)',
+        height=200,
+        margin=dict(l=50, r=50, t=20, b=20),
+        legend=dict(orientation="h", y=1.1),
+        font=dict(family="Inter", color="#a0a0b0")
+    )
     
-    ticker_col, analyze_col = st.columns([3, 1])
-    with ticker_col:
-        ticker_input = st.text_input("Enter ticker symbol", placeholder="AAPL, MSFT, BTC-CAD...")
-    with analyze_col:
-        st.markdown("<br>", unsafe_allow_html=True)
-        analyze_button = st.button("Analyze", type="secondary", use_container_width=True)
+    return fig
+
+
+# ============================================================================
+# UI COMPONENTS
+# ============================================================================
+
+def render_signal_card(signal):
+    """Render a modern signal action card."""
+    signal_class = f"signal-{signal.signal_type.value.lower()}"
+    signal_color = {
+        "BUY": "#10b981",
+        "SELL": "#ef4444", 
+        "HOLD": "#7c3aed"
+    }.get(signal.signal_type.value, "#7c3aed")
     
-    if analyze_button and ticker_input:
-        with st.spinner(f"Analyzing {ticker_input.upper()}..."):
-            try:
-                from src.signals import signal_generator
-                
-                signal = signal_generator.generate_signal(
-                    ticker_input.upper(),
-                    include_fundamentals=include_fundamental,
-                    include_sentiment=include_sentiment,
-                    include_options=include_options
-                )
-                
-                # Display signal card
-                signal_class = ""
-                if signal.signal_type.value == "BUY":
-                    signal_class = "buy-signal"
-                    signal_emoji = "🟢"
-                elif signal.signal_type.value == "SELL":
-                    signal_class = "sell-signal"
-                    signal_emoji = "🔴"
-                else:
-                    signal_emoji = "⚪"
-                
-                st.markdown(f"""
-                <div class="signal-card {signal_class}">
-                    <h2>{signal_emoji} {signal.ticker} - {signal.signal_type.value}</h2>
-                    <p><strong>Confidence:</strong> {signal.confidence:.0%}</p>
+    st.markdown(f"""
+    <div class="glass-card {signal_class}">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <h2 style="margin: 0; color: {signal_color};">{signal.ticker}</h2>
+                <p style="color: #a0a0b0; margin: 4px 0;">Entry: ${signal.entry_price:.2f}</p>
+            </div>
+            <div style="text-align: right;">
+                <div style="font-size: 36px; font-weight: 700; color: {signal_color};">
+                    {signal.signal_type.value}
                 </div>
-                """, unsafe_allow_html=True)
-                
-                # Metrics
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Entry Price", f"${signal.entry_price:.2f}")
-                with col2:
-                    tp_val = f"${signal.take_profit:.2f}" if signal.take_profit else "N/A"
-                    st.metric("Take Profit", tp_val)
-                with col3:
-                    sl_val = f"${signal.stop_loss:.2f}" if signal.stop_loss else "N/A"
-                    st.metric("Stop Loss", sl_val)
-                with col4:
-                    st.metric("Confidence", f"{signal.confidence:.0%}")
-                
-                # Score breakdown
-                st.markdown("### 📊 Score Breakdown")
-                score_col1, score_col2, score_col3, score_col4 = st.columns(4)
-                
-                with score_col1:
-                    st.progress(signal.technical_score)
-                    st.caption(f"Technical: {signal.technical_score:.0%}")
-                with score_col2:
-                    st.progress(signal.fundamental_score)
-                    st.caption(f"Fundamental: {signal.fundamental_score:.0%}")
-                with score_col3:
-                    st.progress(signal.sentiment_score)
-                    st.caption(f"Sentiment: {signal.sentiment_score:.0%}")
-                with score_col4:
-                    st.progress(signal.options_score)
-                    st.caption(f"Options: {signal.options_score:.0%}")
-                
-                # Reasons
-                if signal.reasons:
-                    st.markdown("### 💡 Signal Reasons")
-                    for reason in signal.reasons:
-                        st.markdown(f"- {reason}")
-                
-            except Exception as e:
-                st.error(f"Error analyzing {ticker_input}: {str(e)}")
-    
-    # Recent signals placeholder
-    st.markdown("---")
-    st.markdown("### 📋 Recent Signals")
-    
-    st.info("Click 'Scan Watchlist' to generate signals for all tracked assets.")
-    
-    if scan_button:
-        with st.spinner("Scanning watchlist..."):
-            try:
-                from src.signals import signal_generator, SignalType
-                
-                category = asset_type.lower() if asset_type != "All" else "all"
-                signals = signal_generator.scan_watchlist(category=category)
-                
-                # Filter by confidence
-                filtered = [s for s in signals if s.confidence >= confidence_threshold]
-                
-                # Display summary
-                buy_count = sum(1 for s in filtered if s.signal_type == SignalType.BUY)
-                sell_count = sum(1 for s in filtered if s.signal_type == SignalType.SELL)
-                
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Buy Signals", buy_count)
-                with col2:
-                    st.metric("Sell Signals", sell_count)
-                with col3:
-                    avg_conf = sum(s.confidence for s in filtered) / len(filtered) if filtered else 0
-                    st.metric("Avg Confidence", f"{avg_conf:.0%}")
-                
-                # Display table
-                if filtered:
-                    import pandas as pd
-                    
-                    df = pd.DataFrame([
-                        {
-                            "Ticker": s.ticker,
-                            "Signal": s.signal_type.value,
-                            "Confidence": f"{s.confidence:.0%}",
-                            "Entry": f"${s.entry_price:.2f}",
-                            "Take Profit": f"${s.take_profit:.2f}" if s.take_profit else "N/A",
-                            "Stop Loss": f"${s.stop_loss:.2f}" if s.stop_loss else "N/A",
-                        }
-                        for s in filtered
-                    ])
-                    
-                    st.dataframe(df, use_container_width=True)
-                else:
-                    st.warning("No signals meeting confidence threshold.")
-                    
-            except Exception as e:
-                st.error(f"Error scanning watchlist: {str(e)}")
+                <div style="color: #a0a0b0;">Confidence: {signal.confidence:.0%}</div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
-def show_backtest_dashboard():
-    """Backtesting dashboard tab."""
-    st.markdown("### 🧪 Strategy Backtester")
-    
-    col1, col2 = st.columns([1, 3])
-    
-    with col1:
-        st.markdown("#### Configuration")
-        ticker = st.text_input("Ticker", value="AAPL", key="bt_ticker")
-        period = st.selectbox("Period", ["3mo", "6mo", "1y", "2y", "5y"], index=2, key="bt_period")
-        
-        st.markdown("#### Strategy Params")
-        rsi_thresh = st.slider("RSI Buy Threshold", 10, 40, 30)
-        ma_fast = st.number_input("Fast MA", value=12)
-        ma_slow = st.number_input("Slow MA", value=26)
-        
-        run_bt = st.button("Run Backtest", type="primary", use_container_width=True)
-    
-    with col2:
-        if run_bt:
-            with st.spinner(f"Backtesting {ticker}..."):
-                try:
-                    results = backtest_engine.run_technical_strategy(
-                        ticker,
-                        period=period,
-                        rsi_threshold=rsi_thresh,
-                        ma_fast=ma_fast,
-                        ma_slow=ma_slow
-                    )
-                    
-                    if "error" in results:
-                        st.error(results["error"])
-                    else:
-                        # Metrics
-                        m1, m2, m3, m4 = st.columns(4)
-                        with m1:
-                            st.metric("Total Return", f"{results['total_return']:.2f}%")
-                        with m2:
-                            st.metric("Win Rate", f"{results['win_rate']:.1f}%")
-                        with m3:
-                            st.metric("Max Drawdown", f"{results['max_drawdown']:.2f}%")
-                        with m4:
-                            st.metric("Sharpe Ratio", f"{results['sharpe_ratio']:.2f}")
-                        
-                        # Plot
-                        st.markdown("#### Equity Curve")
-                        # VectorBT plots are Plotly FigureWidgets, need conversion
-                        portfolio = results["portfolio"]
-                        fig = portfolio.plot(title=f"{ticker} Strategy Performance")
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                except Exception as e:
-                    st.error(f"Backtest failed: {str(e)}")
-        else:
-            st.info("Configure settings and click 'Run Backtest' to simulate performance.")
+def render_score_bar(label: str, score: float, color: str):
+    """Render a horizontal score bar."""
+    width = int(score * 100)
+    st.markdown(f"""
+    <div style="margin: 12px 0;">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+            <span style="color: #a0a0b0; font-size: 13px;">{label}</span>
+            <span style="color: white; font-weight: 600;">{score:.0%}</span>
+        </div>
+        <div class="score-bar-container">
+            <div class="score-bar" style="width: {width}%; background: linear-gradient(90deg, {color}, {color}88);"></div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
+
+def render_metric(value: str, label: str, color: str = "#ffffff"):
+    """Render a metric card."""
+    st.markdown(f"""
+    <div class="metric-card">
+        <div class="metric-value" style="color: {color};">{value}</div>
+        <div class="metric-label">{label}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ============================================================================
+# MAIN APP
+# ============================================================================
 
 def main():
-    """Main application entry point."""
-    st.markdown('<h1 class="main-header">📈 TradeSense</h1>', unsafe_allow_html=True)
+    # Sidebar
+    with st.sidebar:
+        st.markdown("## 📈 TradeSense")
+        st.markdown("---")
+        
+        # Ticker Search
+        ticker = st.text_input("🔍 Search Ticker", value="AAPL", placeholder="Enter symbol...")
+        
+        if st.button("Analyze", use_container_width=True):
+            st.session_state['analyze_ticker'] = ticker
+        
+        st.markdown("---")
+        
+        # Watchlist
+        st.markdown("### 📋 Watchlist")
+        watchlist_tickers = ["AAPL", "MSFT", "GOOGL", "NVDA", "TSLA"]
+        
+        for t in watchlist_tickers:
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                if st.button(t, key=f"wl_{t}", use_container_width=True):
+                    st.session_state['analyze_ticker'] = t
+            with col2:
+                st.markdown(f"<span style='color: #10b981;'>↑ 1.2%</span>", unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        # Indicator Toggles
+        st.markdown("### ⚙️ Indicators")
+        show_rsi = st.checkbox("RSI", value=True)
+        show_macd = st.checkbox("MACD", value=True)
+        show_bb = st.checkbox("Bollinger Bands", value=False)
     
-    tab1, tab2 = st.tabs(["🚀 Live Scanner", "🧪 Backtester"])
+    # Main Content
+    current_ticker = st.session_state.get('analyze_ticker', 'AAPL')
     
-    with tab1:
-        show_dashboard()
+    # Header
+    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
     
-    with tab2:
-        show_backtest_dashboard()
-
+    # Fetch data
+    try:
+        df = stock_fetcher.get_historical(current_ticker, period="6mo")
+        current_price = df['Close'].iloc[-1]
+        price_change = ((current_price - df['Close'].iloc[-2]) / df['Close'].iloc[-2]) * 100
+        
+        with col1:
+            st.markdown(f"# {current_ticker}")
+        with col2:
+            render_metric(f"${current_price:.2f}", "Price", "#ffffff")
+        with col3:
+            change_color = "#10b981" if price_change > 0 else "#ef4444"
+            render_metric(f"{price_change:+.2f}%", "Change", change_color)
+        with col4:
+            render_metric(f"{df['Volume'].iloc[-1]/1e6:.1f}M", "Volume", "#7c3aed")
+        
+    except Exception as e:
+        st.error(f"Error fetching data: {e}")
+        return
+    
+    st.markdown("---")
+    
+    # Main Layout
+    chart_col, signal_col = st.columns([3, 1])
+    
+    with chart_col:
+        # Price Chart with Indicators
+        st.markdown("### 📊 Price Chart")
+        fig = create_candlestick_chart(df, current_ticker, show_rsi, show_macd, show_bb)
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Prediction vs Actual
+        st.markdown("### 🔮 Prediction vs Actual")
+        pred_fig = create_prediction_chart(df)
+        st.plotly_chart(pred_fig, use_container_width=True)
+    
+    with signal_col:
+        # Generate Signal
+        st.markdown("### 🎯 Signal Analysis")
+        try:
+            signal = signal_generator.generate_signal(current_ticker)
+            render_signal_card(signal)
+            
+            # Score Breakdown
+            st.markdown("#### Score Breakdown")
+            render_score_bar("Technical", signal.technical_score, "#3b82f6")
+            render_score_bar("Fundamental", signal.fundamental_score, "#10b981")
+            render_score_bar("Sentiment", signal.sentiment_score, "#f59e0b")
+            render_score_bar("Options", signal.options_score, "#ef4444")
+            render_score_bar("ML Model", signal.ml_score, "#7c3aed")
+            
+            # Reasons
+            st.markdown("#### Signal Reasons")
+            for reason in signal.reasons:
+                st.markdown(f"• {reason}")
+                
+        except Exception as e:
+            st.error(f"Signal error: {e}")
 
 
 if __name__ == "__main__":
