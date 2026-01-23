@@ -5,6 +5,7 @@ from .lstm_model import LSTMModel, LSTMPredictor, lstm_model
 from .transformer_model import TransformerModel, transformer_model
 from .ensemble import EnsembleModel, ensemble_model
 from .optimization import ModelOptimizer, optimizer
+from .backtest import WalkForwardValidator
 
 __all__ = [
     'FeatureEngineer', 
@@ -13,5 +14,6 @@ __all__ = [
     'LSTMModel', 'LSTMPredictor', 'lstm_model',
     'TransformerModel', 'transformer_model',
     'EnsembleModel', 'ensemble_model',
-    'ModelOptimizer', 'optimizer'
+    'ModelOptimizer', 'optimizer',
+    'WalkForwardValidator'
 ]

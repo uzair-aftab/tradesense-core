@@ -1,11 +1,12 @@
 """
-TradeSense Adaptive Thresholds Engine
+TradeSense Adaptive Regime Detection
 
-Adjusts technical indicators and signal parameters based on 
-market volatility and asset class.
+Classifies market state (BULL, BEAR, SIDEWAYS, CRISIS) and 
+provides dynamic trading thresholds.
 """
 
 from typing import Dict, Any, Optional
+from enum import Enum
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
@@ -15,92 +16,144 @@ from src.config import config
 
 logger = get_logger(__name__)
 
+
+class MarketRegime(Enum):
+    """Market regime classification."""
+    BULL = "BULL"         # Strong uptrend, buy dips
+    BEAR = "BEAR"         # Strong downtrend, short rallies
+    SIDEWAYS = "SIDEWAYS" # Range-bound, mean reversion
+    CRISIS = "CRISIS"     # Extreme volatility, defensive
+    UNKNOWN = "UNKNOWN"
+
+
 class AdaptiveThresholds:
     """
-    Manages dynamic thresholds for technical analysis.
-    
-    Uses ATR (Average True Range) to detect volatility regimes
-    and adjust parameters like RSI limits and Stop Loss distances.
+    Manages dynamic thresholds based on Market Regime.
     """
     
     def __init__(self, atr_period: int = 14):
         self.atr_period = atr_period
-        
-        # Base config values
         self.base_rsi_oversold = config.RSI_OVERSOLD
         self.base_rsi_overbought = config.RSI_OVERBOUGHT
         
     def detect_regime(self, df: pd.DataFrame) -> Dict[str, Any]:
         """
-        Detect volatility regime based on ATR.
+        Detect market regime using Trend, Momentum, and Volatility.
         
-        Returns:
-            Dict with:
-                - regime: "LOW", "NORMAL", "HIGH"
-                - atr: Current ATR value
-                - atr_percent: ATR as percentage of price
+        Logic:
+        - BULL: SMA50 > SMA200, or ADX > 25 + RSI > 50 + Price > SMA50
+        - BEAR: SMA50 < SMA200, or ADX > 25 + RSI < 50 + Price < SMA50
+        - CRISIS: ATR spiked > 2x average, or recent crash
+        - SIDEWAYS: Low ADX (< 20) or price chopping around SMA
         """
-        if len(df) < self.atr_period + 1:
-            return {"regime": "NORMAL", "atr": 0.0, "atr_percent": 0.0}
+        if len(df) < 200:
+            return {
+                "regime": MarketRegime.UNKNOWN.value, 
+                "volatility": "NORMAL",
+                "details": "Insufficient data (need 200 bars)"
+            }
             
-        # Calculate ATR
-        atr_series = ta.atr(df["High"], df["Low"], df["Close"], length=self.atr_period)
-        current_atr = atr_series.iloc[-1]
-        current_price = df["Close"].iloc[-1]
+        # --- 1. Calculate Indicators ---
+        close = df["Close"]
         
-        if pd.isna(current_atr):
-            return {"regime": "NORMAL", "atr": 0.0, "atr_percent": 0.0}
-            
-        atr_percent = (current_atr / current_price) * 100
+        # Trend
+        sma50 = ta.sma(close, length=50)
+        sma200 = ta.sma(close, length=200)
         
-        # Define regimes based on ATR %
-        # Low: < 1% (Stable, large caps)
-        # Normal: 1-3% (Typical stocks)
-        # High: > 3% (Crypto, volatile stocks)
-        
-        if atr_percent < 1.0:
-            regime = "LOW"
-        elif atr_percent > 3.0:
-            regime = "HIGH"
+        # Momentum/Strength
+        adx = ta.adx(df["High"], df["Low"], close, length=14)
+        if adx is not None and not adx.empty:
+            adx_val = adx["ADX_14"].iloc[-1]
         else:
-            regime = "NORMAL"
+            adx_val = 0
+            
+        rsi = ta.rsi(close, length=14).iloc[-1]
+        
+        # Volatility
+        atr = ta.atr(df["High"], df["Low"], close, length=14)
+        current_atr = atr.iloc[-1]
+        atr_pct = (current_atr / close.iloc[-1]) * 100
+        atr_avg = atr.rolling(30).mean().iloc[-1]
+        
+        # Volatility Regime
+        if atr_pct > 3.0 or current_atr > (atr_avg * 1.5):
+            vol_regime = "HIGH"
+        elif atr_pct < 1.0:
+            vol_regime = "LOW"
+        else:
+            vol_regime = "NORMAL"
+            
+        # --- 2. Classify Market Regime ---
+        current_price = close.iloc[-1]
+        last_sma50 = sma50.iloc[-1]
+        last_sma200 = sma200.iloc[-1]
+        
+        regime = MarketRegime.SIDEWAYS # Default
+        
+        # Crisis Check First
+        if vol_regime == "HIGH" and current_price < last_sma50:
+            regime = MarketRegime.CRISIS
+            
+        # Trend Checks
+        elif adx_val > 25:
+            # Strong Trend
+            if current_price > last_sma50 and rsi > 50:
+                regime = MarketRegime.BULL
+            elif current_price < last_sma50 and rsi < 50:
+                regime = MarketRegime.BEAR
+        
+        # Moving Average Flows
+        elif last_sma50 > last_sma200 and current_price > last_sma50:
+            regime = MarketRegime.BULL
+        elif last_sma50 < last_sma200 and current_price < last_sma50:
+            regime = MarketRegime.BEAR
             
         return {
-            "regime": regime,
-            "atr": float(current_atr),
-            "atr_percent": float(atr_percent)
+            "regime": regime.value,
+            "volatility": vol_regime,
+            "atr_percent": round(atr_pct, 2),
+            "adx": round(adx_val, 2),
+            "details": f"Price vs SMA50: {'Above' if current_price > last_sma50 else 'Below'}"
         }
-        
-    def get_rsi_thresholds(self, regime: str) -> Dict[str, int]:
-        """
-        Get adjusted RSI thresholds based on volatility.
-        
-        High volatility -> Wider bands (e.g. 20/80) to avoid false signals.
-        Low volatility -> Tighter bands (e.g. 35/65) to catch smaller moves.
-        """
-        if regime == "HIGH":
-            return {"oversold": 20, "overbought": 80}
-        elif regime == "LOW":
-            return {"oversold": 35, "overbought": 65}
-        else:
-            return {
-                "oversold": self.base_rsi_oversold,
-                "overbought": self.base_rsi_overbought
-            }
 
-    def get_stop_loss_multiplier(self, regime: str) -> float:
-        """
-        Get ATR multiplier for stop loss.
-        
-        High volatility -> Wider stops (e.g. 2.5x ATR).
-        Low volatility -> Tighter stops (e.g. 1.5x ATR).
-        """
-        if regime == "HIGH":
-            return 2.5
-        elif regime == "LOW":
-            return 1.5
-        else:
-            return 2.0
+    def get_rsi_thresholds(self, regime_str: str) -> Dict[str, int]:
+        """Adjust RSI limits based on regime."""
+        try:
+            regime = MarketRegime(regime_str)
+        except ValueError:
+            regime = MarketRegime.UNKNOWN
 
-# Singleton instance
+        if regime == MarketRegime.BULL:
+            # Bull market: RSI stays high, oversold is rare/shallow
+            return {"oversold": 40, "overbought": 80}
+            
+        elif regime == MarketRegime.BEAR:
+            # Bear market: RSI stays low, overbought is rare/shallow
+            return {"oversold": 20, "overbought": 60}
+            
+        elif regime == MarketRegime.CRISIS:
+            # volatile - wide bands
+            return {"oversold": 15, "overbought": 85}
+            
+        else: # SIDEWAYS / UNKNOWN
+            return {"oversold": 30, "overbought": 70}
+
+    def get_stop_loss_multiplier(self, regime_str: str) -> float:
+        """Adjust Stop Loss ATR multiplier."""
+        try:
+            regime = MarketRegime(regime_str)
+        except ValueError:
+            regime = MarketRegime.UNKNOWN
+
+        if regime == MarketRegime.BULL:
+            return 2.0  # Standard
+        elif regime == MarketRegime.BEAR:
+            return 1.5  # Tighten stops in downtrend (if long) or standard if short
+        elif regime == MarketRegime.CRISIS:
+            return 3.0  # Wide stops for volatility (or cash)
+        elif regime == MarketRegime.SIDEWAYS:
+            return 1.5  # Tight stops in range
+        return 2.0
+
+# Singleton
 adaptive_thresholds = AdaptiveThresholds()

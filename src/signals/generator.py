@@ -155,7 +155,8 @@ class SignalGenerator:
         # Adaptive Thresholds - Detect Regime
         regime_info = adaptive_thresholds.detect_regime(df)
         regime = regime_info["regime"]
-        logger.info(f"Market Regime for {ticker}: {regime} (ATR={regime_info['atr_percent']:.2f}%)")
+        volatility = regime_info["volatility"]
+        logger.info(f"Market Regime for {ticker}: {regime} (Vol: {volatility}, ATR={regime_info['atr_percent']}%)")
         
         # Get dynamic thresholds
         rsi_thresh = adaptive_thresholds.get_rsi_thresholds(regime)
@@ -173,7 +174,8 @@ class SignalGenerator:
         elif tech_result.get("composite_signal") is False:
             reasons.append(f"Technical: {tech_result.get('sell_signals', 0)}/3 sell signals")
             
-        reasons.append(f"Regime: {regime} Volatility")
+        if regime != "UNKNOWN":
+            reasons.append(f"Regime: {regime} ({volatility} Vol)")
         
         # Support/Resistance
         sr_result = support_resistance.find_levels(df)
