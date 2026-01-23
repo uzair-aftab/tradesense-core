@@ -868,19 +868,40 @@ def main():
         }
         selected_tf_label = st.selectbox("Timeframe", list(timeframe_options.keys()), index=4, label_visibility="collapsed")
         selected_timeframe = timeframe_options[selected_tf_label]
+
+    # Auto-Refresh Logic
+    refresh_col, _ = st.columns([1, 5])
+    with refresh_col:
+        auto_refresh = st.checkbox("Live Updates (10s)", value=True)
+    
+    if auto_refresh:
+        import time
+        time.sleep(10)
+        st.rerun()
     
     current_ticker = st.session_state.get('current_ticker', 'AAPL')
     
-    # Fetch data
+    # Fetch data (Timeframe Aware)
     try:
-        df = stock_fetcher.get_historical(current_ticker, period="6mo")
+        # Use MTF Engine to get correct execution data
+        # Force fresh fetch for live updates
+        df = mtf_engine.get_data(current_ticker, selected_timeframe, use_cache=False)
+        
+        if df.empty:
+            st.error(f"No data found for {current_ticker} at {selected_timeframe.label}")
+            return
+
+        # Generate Signal (Daily for robustness, or could be MTF)
+        # For now, keep main signal as Daily/General context
         signal = signal_generator.generate_signal(current_ticker)
+        
         current_price = df['Close'].iloc[-1]
         prev_price = df['Close'].iloc[-2]
         price_change = ((current_price - prev_price) / prev_price) * 100
         
         # Update paper trader prices
         paper_trader.update_prices({current_ticker: current_price})
+
     except Exception as e:
         st.error(f"Error: {e}")
         return
@@ -910,95 +931,111 @@ def main():
     
     # === LEFT ===
     with left_col:
-        with st.spinner("Scanning..."):
-            top_signals = get_top_signals()
-        render_top_signals(top_signals)
+        try:
+            with st.spinner("Scanning..."):
+                top_signals = get_top_signals()
+            render_top_signals(top_signals)
+        except Exception as e:
+            st.error(f"Left Col Error: {e}")
     
     # === CENTER ===
     with center_col:
-        # Price chart
-        fig = create_price_chart(df, current_ticker)
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Prediction chart
-        st.markdown("**📈 Actual vs Predicted Price (Last 30 Days)**")
-        
-        pred_col, acc_col = st.columns([5, 1])
-        pred_fig, accuracy = create_prediction_chart(df)
-        
-        with pred_col:
-            if pred_fig:
-                st.plotly_chart(pred_fig, use_container_width=True)
-            else:
-                st.info("ML predictions unavailable")
-        
-        with acc_col:
-            if accuracy is not None:
-                color = "green" if accuracy > 55 else "yellow" if accuracy > 45 else "red"
-                st.markdown(f'''
-                <div class="metric-box" style="margin-top:30px;">
-                    <div class="metric-val {color}">{accuracy:.1f}%</div>
-                    <div class="metric-lbl">Accuracy</div>
-                </div>
-                ''', unsafe_allow_html=True)
-        
-        # Track button
-        track_col1, track_col2 = st.columns([1, 3])
-        with track_col1:
-            predicted_dir = "UP" if signal.signal_type.value == "BUY" else "DOWN" if signal.signal_type.value == "SELL" else "HOLD"
-            if st.button("🔴 TRACK", use_container_width=True):
-                save_prediction(current_ticker, current_price, predicted_dir, signal.confidence)
-                st.success(f"Tracking {current_ticker} @ ${current_price:.2f} - Predicted: {predicted_dir}")
-        
-        with track_col2:
-            # Show tracked prediction stats
-            predictions = load_predictions()
-            verified = [p for p in predictions if p['correct'] is not None]
-            if verified:
-                correct = sum(1 for p in verified if p['correct'])
-                track_accuracy = (correct / len(verified)) * 100 if verified else 0
-                st.markdown(f"**Tracked: {len(predictions)}** | **Verified: {len(verified)}** | **Accuracy: {track_accuracy:.0f}%**")
+        try:
+            # Price chart
+            st.markdown(f"**{current_ticker} Price Action** <span style='color:#ff4444;font-size:10px;vertical-align:middle;margin-left:8px;'>● LIVE</span>", unsafe_allow_html=True)
+            fig = create_price_chart(df, current_ticker)
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Prediction chart
+            st.markdown(f"**📈 Prediction Model ({selected_timeframe.label})**")
+            
+            pred_col, acc_col = st.columns([5, 1])
+            try:
+                pred_fig, accuracy = create_prediction_chart(df)
+                with pred_col:
+                    if pred_fig:
+                        st.plotly_chart(pred_fig, use_container_width=True)
+                    else:
+                        st.info("ML predictions unavailable")
+                
+                with acc_col:
+                    if accuracy is not None:
+                        color = "green" if accuracy > 55 else "yellow" if accuracy > 45 else "red"
+                        st.markdown(f'''
+                        <div class="metric-box" style="margin-top:30px;">
+                            <div class="metric-val {color}">{accuracy:.1f}%</div>
+                            <div class="metric-lbl">Accuracy</div>
+                        </div>
+                        ''', unsafe_allow_html=True)
+            except Exception as e:
+                st.warning(f"Prediction Error: {e}")
+            
+            # Track button
+            track_col1, track_col2 = st.columns([1, 3])
+            with track_col1:
+                predicted_dir = "UP" if signal.signal_type.value == "BUY" else "DOWN" if signal.signal_type.value == "SELL" else "HOLD"
+                if st.button("🔴 TRACK", use_container_width=True):
+                    save_prediction(current_ticker, current_price, predicted_dir, signal.confidence)
+                    st.success(f"Tracked {current_ticker}")
+            
+            with track_col2:
+                # Show tracked prediction stats
+                predictions = load_predictions()
+                verified = [p for p in predictions if p['correct'] is not None]
+                if verified:
+                    correct = sum(1 for p in verified if p['correct'])
+                    track_accuracy = (correct / len(verified)) * 100 if verified else 0
+                    st.markdown(f"**Tracked: {len(predictions)}** | **Acc: {track_accuracy:.0f}%**")
+                    
+        except Exception as e:
+            st.error(f"Center Col Error: {e}")
     
     # === RIGHT ===
     with right_col:
-        render_main_signal(signal)
-        render_action_panel(signal)
-        render_score_breakdown(signal)
-        
-        # Expanders with fixed styling
-        with st.expander("📰 Sentiment Details", expanded=False):
-            render_sentiment_panel(current_ticker)
-        
-        with st.expander("📊 Fundamentals", expanded=False):
-            render_fundamental_panel(current_ticker)
-        
-        with st.expander("🤖 ML Model Info", expanded=False):
-            from src.ml import signal_model, lstm_model, transformer_model, ensemble_model, FeatureEngineer
+        try:
+            render_main_signal(signal)
+            render_action_panel(signal)
+            render_score_breakdown(signal)
             
-            # Active models status
-            models_status = []
-            if signal_model.is_trained: models_status.append(f"XGB ({ensemble_model.xgb_weight:.0%})")
-            if lstm_model.is_trained: models_status.append(f"LSTM ({ensemble_model.lstm_weight:.0%})")
-            if transformer_model.is_trained: models_status.append(f"TF ({ensemble_model.transformer_weight:.0%})")
+            # Expanders
+            with st.expander("📰 Sentiment Details", expanded=False):
+                render_sentiment_panel(current_ticker)
             
-            active_str = ", ".join(models_status) if models_status else "No models loaded"
-            feature_count = len(FeatureEngineer().feature_columns)
+            with st.expander("📊 Fundamentals", expanded=False):
+                render_fundamental_panel(current_ticker)
             
-            st.markdown(f'''
-            <div class="scroll-panel">
-                <div class="panel-row"><span class="panel-label">Ensemble</span><span class="panel-value">{active_str}</span></div>
-                <div class="panel-row"><span class="panel-label">Features</span><span class="panel-value">{feature_count} (v2)</span></div>
-                <div class="panel-row"><span class="panel-label">XGBoost</span><span class="panel-value">{"✅ Active" if signal_model.is_trained else "❌ Inactive"}</span></div>
-                <div class="panel-row"><span class="panel-label">LSTM (GPU)</span><span class="panel-value">{"✅ Active" if lstm_model.is_trained else "❌ Inactive"}</span></div>
-                <div class="panel-row"><span class="panel-label">Transformer</span><span class="panel-value">{"✅ Active" if transformer_model.is_trained else "❌ Inactive"}</span></div>
-            </div>
-            ''', unsafe_allow_html=True)
-        
-        # Paper Trading
-        st.markdown("---")
-        with st.expander("💰 Paper Trading", expanded=True):
-            render_paper_trading(current_ticker, current_price, signal)
-
+            with st.expander("🤖 ML Model Info", expanded=False):
+                try:
+                    from src.ml import signal_model, lstm_model, transformer_model, ensemble_model, FeatureEngineer
+                    
+                    # Active models status
+                    models_status = []
+                    if signal_model.is_trained: models_status.append(f"XGB ({ensemble_model.xgb_weight:.0%})")
+                    if lstm_model.is_trained: models_status.append(f"LSTM ({ensemble_model.lstm_weight:.0%})")
+                    if transformer_model.is_trained: models_status.append(f"TF ({ensemble_model.transformer_weight:.0%})")
+                    
+                    active_str = ", ".join(models_status) if models_status else "No models loaded"
+                    feature_count = len(FeatureEngineer().feature_columns)
+                    
+                    st.markdown(f'''
+                    <div class="scroll-panel">
+                        <div class="panel-row"><span class="panel-label">Ensemble</span><span class="panel-value">{active_str}</span></div>
+                        <div class="panel-row"><span class="panel-label">Features</span><span class="panel-value">{feature_count} (v2)</span></div>
+                    </div>
+                    ''', unsafe_allow_html=True)
+                except Exception as e:
+                    st.markdown(f"Error loading model info: {e}")
+            
+            # Paper Trading
+            st.markdown("---")
+            with st.expander("💰 Paper Trading", expanded=True):
+                try:
+                    render_paper_trading(current_ticker, current_price, signal)
+                except Exception as e:
+                    st.error(f"Paper Trading Error: {e}")
+                    
+        except Exception as e:
+            st.error(f"Right Col Error: {e}")
 
 if __name__ == "__main__":
     main()
