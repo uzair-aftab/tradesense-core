@@ -22,7 +22,7 @@ from src.analysis.adaptive import AdaptiveThresholds
 from src.data.fetcher_fundamentals import fundamentals_fetcher
 from src.data.fetcher_options import options_fetcher
 from src.sentiment import sentiment_aggregator
-from src.ml import FeatureEngineer, signal_model
+from src.ml import FeatureEngineer, signal_model, ensemble_model
 from src.config import config
 
 logger = get_logger(__name__)
@@ -156,7 +156,7 @@ class SignalGenerator:
         regime_info = adaptive_thresholds.detect_regime(df)
         regime = regime_info["regime"]
         volatility = regime_info["volatility"]
-        logger.info(f"Market Regime for {ticker}: {regime} (Vol: {volatility}, ATR={regime_info['atr_percent']}%)")
+        logger.info(f"Market Regime for {ticker}: {regime} (Vol: {volatility}, ATR={regime_info.get('atr_percent', 'N/A')}%)")
         
         # Get dynamic thresholds
         rsi_thresh = adaptive_thresholds.get_rsi_thresholds(regime)
@@ -230,20 +230,28 @@ class SignalGenerator:
             except Exception as e:
                 logger.warning(f"Options analysis failed for {ticker}: {e}")
         
-        # ML Model Prediction
+        # ML Model Prediction (using Ensemble: XGB + LSTM + Transformer)
         ml_score = 0.5  # Neutral default
         try:
-            if signal_model.is_trained or os.path.exists(signal_model.model_path):
-                # Generate features for current state
-                feature_engineer = FeatureEngineer()
-                features_df = feature_engineer.calculate_features(df, include_targets=False)
-                if not features_df.empty:
-                    # Get latest row for prediction
-                    X_latest = features_df[feature_engineer.feature_columns].iloc[[-1]]
-                    ml_score = signal_model.predict_proba(X_latest)[0]
-                    reasons.append(f"ML Model: {ml_score:.0%} bullish probability")
+            # Use ensemble for combined prediction
+            ensemble_result = ensemble_model.predict(df)
+            ml_score = ensemble_result.get('probability', 0.5)
+            components = ensemble_result.get('components', {})
+            active_models = [k for k, v in components.items() if v is not None]
+            reasons.append(f"ML Ensemble ({', '.join(active_models)}): {ml_score:.0%} bullish")
         except Exception as e:
             logger.warning(f"ML prediction failed for {ticker}: {e}")
+            # Fallback to XGBoost only
+            try:
+                if signal_model.is_trained:
+                    feature_engineer = FeatureEngineer()
+                    features_df = feature_engineer.calculate_features(df, include_targets=False)
+                    if not features_df.empty:
+                        X_latest = features_df[feature_engineer.feature_columns].iloc[[-1]]
+                        ml_score = signal_model.predict_proba(X_latest)[0]
+                        reasons.append(f"ML (XGB Fallback): {ml_score:.0%}")
+            except Exception as e2:
+                logger.warning(f"XGB fallback also failed: {e2}")
         
         # Calculate weighted composite score
         composite_score = (
@@ -262,12 +270,17 @@ class SignalGenerator:
         else:
             signal_type = SignalType.HOLD
         
-        # Calculate confidence
-        # Higher confidence when all signals agree
-        scores = [technical_score, fundamental_score, sentiment_score, options_score]
-        score_variance = np.var(scores)
-        agreement_factor = 1 - min(score_variance * 2, 0.5)  # Lower variance = higher agreement
-        confidence = abs(composite_score - 0.5) * 2 * agreement_factor
+        # Calculate confidence - direct and meaningful
+        # Confidence = how far from neutral (0.5) the composite is, scaled to 0-1
+        if signal_type == SignalType.BUY:
+            # BUY: composite 0.6 → 60% confidence, 0.8 → 80%
+            confidence = composite_score
+        elif signal_type == SignalType.SELL:
+            # SELL: composite 0.3 → 70% confidence (1 - 0.3)
+            confidence = 1 - composite_score
+        else:
+            # HOLD: confidence in the hold decision (how close to 0.5)
+            confidence = 1 - abs(composite_score - 0.5) * 2
         
         # Calculate targets with adaptive multiplier
         sl_multiplier = adaptive_thresholds.get_stop_loss_multiplier(regime)

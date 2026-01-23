@@ -852,11 +852,16 @@ def main():
     ''', unsafe_allow_html=True)
     
     # Search bar with timeframe selector
+    # Initialize session state for ticker
+    if 'current_ticker' not in st.session_state:
+        st.session_state['current_ticker'] = 'AAPL'
+    
     search_col, tf_col, spacer = st.columns([1, 1, 4])
     with search_col:
-        ticker_input = st.text_input("", value="AAPL", placeholder="Ticker...", label_visibility="collapsed")
+        ticker_input = st.text_input("", value=st.session_state['current_ticker'], placeholder="Ticker...", label_visibility="collapsed", key="ticker_input_field")
         if st.button("ANALYZE", use_container_width=True):
             st.session_state['current_ticker'] = ticker_input
+            st.rerun()  # Force immediate update
     
     with tf_col:
         timeframe_options = {
@@ -869,17 +874,13 @@ def main():
         selected_tf_label = st.selectbox("Timeframe", list(timeframe_options.keys()), index=4, label_visibility="collapsed")
         selected_timeframe = timeframe_options[selected_tf_label]
 
-    # Auto-Refresh Logic
+    # Auto-Refresh Toggle (actual refresh moved to END of main())
     refresh_col, _ = st.columns([1, 5])
     with refresh_col:
-        auto_refresh = st.checkbox("Live Updates (10s)", value=True)
+        auto_refresh = st.checkbox("Live Updates (10s)", value=False)  # Default OFF for usability
     
-    if auto_refresh:
-        import time
-        time.sleep(10)
-        st.rerun()
-    
-    current_ticker = st.session_state.get('current_ticker', 'AAPL')
+    # Use the session state ticker
+    current_ticker = st.session_state['current_ticker']
     
     # Fetch data (Timeframe Aware)
     try:
@@ -1036,6 +1037,12 @@ def main():
                     
         except Exception as e:
             st.error(f"Right Col Error: {e}")
+    
+    # Auto-refresh at END of main (non-blocking approach)
+    if auto_refresh:
+        import time
+        time.sleep(10)
+        st.rerun()
 
 if __name__ == "__main__":
     main()

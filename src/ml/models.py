@@ -45,6 +45,9 @@ class SignalModel:
         
         # Ensure model directory exists
         os.makedirs(os.path.dirname(self.model_path), exist_ok=True)
+        
+        # Auto-load existing model (like LSTM/Transformer)
+        self.load()
     
     def train(
         self, 
