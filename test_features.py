@@ -1,33 +1,23 @@
-from src.ml.feature_engineer import FeatureEngineer
+"""Quick test script for FeatureEngineer v2"""
+import traceback
+from src.ml import FeatureEngineer
 from src.data import stock_fetcher
-import pandas as pd
 
-def test_feature_generation():
-    print("Fetching data for AAPL...")
-    df = stock_fetcher.get_historical("AAPL", period="1y")
-    print(f"Raw data shape: {df.shape}")
+try:
+    print("Fetching AAPL data...")
+    df = stock_fetcher.get_historical('AAPL', period='6mo')
+    print(f"Data shape: {df.shape}")
     
-    engineer = FeatureEngineer()
+    print("\nCalculating features...")
+    fe = FeatureEngineer()
+    result = fe.calculate_features(df)
     
-    print("\nGenerating features (Training Mode)...")
-    X, y = engineer.prepare_training_data(df, horizon=3)
-    
-    print(f"X shape: {X.shape}")
-    print(f"y shape: {y.shape}")
-    print("\nFeature Columns Generated:")
-    print(engineer.feature_columns)
-    
-    print("\nSample Features:")
-    print(X.tail())
-    
-    print("\nTarget Distribution:")
-    print(y.value_counts(normalize=True))
-    
-    # Check for NaNs
-    if X.isnull().values.any():
-        print("WARNING: NaNs found in X")
-    else:
-        print("SUCCESS: No NaNs in features")
-
-if __name__ == "__main__":
-    test_feature_generation()
+    print(f"\nFeature count: {fe.get_feature_count()}")
+    print(f"Result shape: {result.shape}")
+    print("\nFeature names:")
+    for i, name in enumerate(fe.get_feature_names(), 1):
+        print(f"  {i:2d}. {name}")
+        
+except Exception as e:
+    print(f"Error: {e}")
+    traceback.print_exc()
