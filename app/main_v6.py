@@ -7,6 +7,7 @@ Features:
 - One-click trade execution
 - Real-time position tracking
 - Portfolio analytics
+- Prediction chart (actual vs predicted)
 """
 
 import streamlit as st
@@ -14,13 +15,14 @@ from streamlit_autorefresh import st_autorefresh
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
+import numpy as np
 import sys
 import os
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.ml import Timeframe, mtf_engine
+from src.ml import Timeframe, mtf_engine, ensemble_model, FeatureEngineer
 from src.signals.timeframe_generator import timeframe_signal_generator, TradeSetup
 from src.trading.trading_station import trading_station
 from src.utils.logger import get_logger
@@ -42,154 +44,21 @@ st.set_page_config(
 # ============================================================================
 st.markdown("""
 <style>
-    /* Dark theme */
     .stApp { background-color: #0e1117; }
-    
-    /* Header */
-    .main-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 10px 20px;
-        background: linear-gradient(90deg, #1a1f2e 0%, #0e1117 100%);
-        border-bottom: 1px solid #2d3748;
-        margin-bottom: 15px;
-    }
-    
-    .header-title {
-        font-size: 24px;
-        font-weight: bold;
-        color: #00d4aa;
-    }
-    
-    .header-ticker {
-        font-size: 28px;
-        font-weight: bold;
-        color: white;
-    }
-    
-    .header-price {
-        font-size: 24px;
-        color: white;
-        margin-left: 15px;
-    }
-    
-    .header-change.positive { color: #00d4aa; }
-    .header-change.negative { color: #ff4757; }
-    
-    .header-portfolio {
-        text-align: right;
-        color: #a0a0a0;
-    }
-    
-    .header-portfolio-value {
-        font-size: 20px;
-        font-weight: bold;
-        color: white;
-    }
-    
-    /* Signal Card */
-    .signal-card {
-        background: #1a1f2e;
-        border-radius: 12px;
-        padding: 20px;
-        border: 2px solid #2d3748;
-    }
-    
-    .signal-card.long { border-color: #00d4aa; }
-    .signal-card.short { border-color: #ff4757; }
-    .signal-card.hold { border-color: #ffa502; }
-    
-    .signal-direction {
-        font-size: 28px;
-        font-weight: bold;
-        text-align: center;
-        padding: 10px;
-        border-radius: 8px;
-        margin-bottom: 15px;
-    }
-    
-    .signal-direction.long { background: rgba(0, 212, 170, 0.2); color: #00d4aa; }
-    .signal-direction.short { background: rgba(255, 71, 87, 0.2); color: #ff4757; }
-    .signal-direction.hold { background: rgba(255, 165, 2, 0.2); color: #ffa502; }
-    
-    .signal-level {
-        display: flex;
-        justify-content: space-between;
-        padding: 8px 0;
-        border-bottom: 1px solid #2d3748;
-    }
-    
-    .signal-label { color: #a0a0a0; }
-    .signal-value { color: white; font-weight: bold; }
-    .signal-value.target { color: #00d4aa; }
-    .signal-value.stop { color: #ff4757; }
-    
-    /* Positions Table */
-    .positions-header {
-        font-size: 18px;
-        font-weight: bold;
-        color: white;
-        margin: 15px 0 10px;
-    }
-    
-    .position-row {
-        display: grid;
-        grid-template-columns: 1fr 1fr 1fr 1fr 1fr 100px;
-        padding: 10px;
-        border-bottom: 1px solid #2d3748;
-        align-items: center;
-    }
-    
-    .position-row:hover { background: #1a1f2e; }
-    
-    .pnl-positive { color: #00d4aa; }
-    .pnl-negative { color: #ff4757; }
-    
-    /* Analytics Footer */
-    .analytics-bar {
-        display: flex;
-        justify-content: space-around;
-        padding: 15px;
-        background: #1a1f2e;
-        border-radius: 8px;
-        margin-top: 15px;
-    }
-    
-    .analytics-item {
-        text-align: center;
-    }
-    
-    .analytics-value {
-        font-size: 18px;
-        font-weight: bold;
-        color: white;
-    }
-    
-    .analytics-label {
-        font-size: 12px;
-        color: #a0a0a0;
-    }
-    
-    /* Live indicator */
-    .live-dot {
-        display: inline-block;
-        width: 10px;
-        height: 10px;
-        background: #ff4757;
-        border-radius: 50%;
-        animation: pulse 1.5s infinite;
-        margin-right: 5px;
-    }
-    
-    @keyframes pulse {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.3; }
-    }
-    
-    /* Hide default elements */
     #MainMenu, footer, header { visibility: hidden; }
     .block-container { padding-top: 1rem; }
+    
+    .metric-card {
+        background: #1a1f2e;
+        border-radius: 8px;
+        padding: 15px;
+        text-align: center;
+    }
+    
+    .live-indicator {
+        color: #ff4757;
+        font-weight: bold;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -224,43 +93,14 @@ def create_candlestick_chart(df: pd.DataFrame, setup: TradeSetup = None) -> go.F
     
     # Add entry/target/stop lines if we have a setup
     if setup and setup.direction != "HOLD":
-        # Entry line
-        fig.add_hline(
-            y=setup.entry_price, 
-            line_dash="solid", 
-            line_color="white",
-            annotation_text=f"Entry: ${setup.entry_price:.2f}",
-            row=1
-        )
-        # Target line
-        fig.add_hline(
-            y=setup.target_price, 
-            line_dash="dash", 
-            line_color="#00d4aa",
-            annotation_text=f"Target: ${setup.target_price:.2f}",
-            row=1
-        )
-        # Stop line
-        fig.add_hline(
-            y=setup.stop_loss, 
-            line_dash="dash", 
-            line_color="#ff4757",
-            annotation_text=f"Stop: ${setup.stop_loss:.2f}",
-            row=1
-        )
+        fig.add_hline(y=setup.entry_price, line_dash="solid", line_color="white", row=1)
+        fig.add_hline(y=setup.target_price, line_dash="dash", line_color="#00d4aa", row=1)
+        fig.add_hline(y=setup.stop_loss, line_dash="dash", line_color="#ff4757", row=1)
     
     # Volume
-    colors = ['#00d4aa' if c >= o else '#ff4757' 
-              for c, o in zip(df['Close'], df['Open'])]
-    
+    colors = ['#00d4aa' if c >= o else '#ff4757' for c, o in zip(df['Close'], df['Open'])]
     fig.add_trace(
-        go.Bar(
-            x=df.index, 
-            y=df['Volume'],
-            marker_color=colors,
-            opacity=0.7,
-            name='Volume'
-        ),
+        go.Bar(x=df.index, y=df['Volume'], marker_color=colors, opacity=0.7, name='Volume'),
         row=2, col=1
     )
     
@@ -268,7 +108,7 @@ def create_candlestick_chart(df: pd.DataFrame, setup: TradeSetup = None) -> go.F
         template='plotly_dark',
         paper_bgcolor='#0e1117',
         plot_bgcolor='#0e1117',
-        height=450,
+        height=400,
         margin=dict(l=50, r=50, t=10, b=30),
         xaxis_rangeslider_visible=False,
         showlegend=False,
@@ -280,154 +120,158 @@ def create_candlestick_chart(df: pd.DataFrame, setup: TradeSetup = None) -> go.F
     return fig
 
 
-# ============================================================================
-# UI COMPONENTS
-# ============================================================================
-def render_header(ticker: str, price: float, change_pct: float, portfolio_value: float):
-    """Render the top header bar."""
-    change_class = "positive" if change_pct >= 0 else "negative"
-    return_pct = ((portfolio_value - 10000) / 10000) * 100
+def create_prediction_chart(df: pd.DataFrame, predictions: np.ndarray = None) -> go.Figure:
+    """Create chart showing actual prices vs ML predictions."""
     
-    st.markdown(f"""
-    <div class="main-header">
-        <div style="display: flex; align-items: center;">
-            <span class="header-title">📈 TradeSense Pro</span>
-        </div>
-        <div style="display: flex; align-items: center;">
-            <span class="header-ticker">{ticker}</span>
-            <span class="header-price">${price:.2f}</span>
-            <span class="header-change {change_class}" style="margin-left: 10px;">{change_pct:+.2f}%</span>
-        </div>
-        <div class="header-portfolio">
-            <div>Portfolio</div>
-            <div class="header-portfolio-value">${portfolio_value:,.2f}</div>
-            <div class="header-change {change_class}">{return_pct:+.2f}%</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    fig = go.Figure()
+    
+    # Actual prices (last 50 points)
+    display_df = df.tail(50)
+    
+    fig.add_trace(go.Scatter(
+        x=list(range(len(display_df))),
+        y=display_df['Close'].values,
+        mode='lines',
+        name='Actual Price',
+        line=dict(color='#00d4aa', width=2)
+    ))
+    
+    # If we have predictions array, show them
+    if predictions is not None:
+        try:
+            # Handle both scalar and array predictions
+            if isinstance(predictions, (int, float, np.floating)):
+                # Single prediction value - create a constant line
+                pred_value = float(predictions)
+                price_range = float(display_df['Close'].max() - display_df['Close'].min())
+                pred_level = float(display_df['Close'].mean()) + (pred_value - 0.5) * price_range
+                
+                fig.add_hline(
+                    y=pred_level, 
+                    line_dash="dash", 
+                    line_color="#ffa502",
+                    annotation_text=f"ML: {pred_value:.0%} bullish"
+                )
+            elif hasattr(predictions, '__len__') and len(predictions) > 0:
+                # Array of predictions
+                price_range = display_df['Close'].max() - display_df['Close'].min()
+                pred_scaled = display_df['Close'].mean() + (np.array(predictions)[-len(display_df):] - 0.5) * price_range
+                
+                fig.add_trace(go.Scatter(
+                    x=list(range(len(pred_scaled))),
+                    y=pred_scaled,
+                    mode='lines',
+                    name='ML Prediction Trend',
+                    line=dict(color='#ffa502', width=2, dash='dash')
+                ))
+        except Exception as e:
+            pass  # Silently ignore prediction errors
+    
+    # Add prediction arrow for next period
+    last_price = display_df['Close'].iloc[-1]
+    
+    fig.update_layout(
+        template='plotly_dark',
+        paper_bgcolor='#0e1117',
+        plot_bgcolor='#0e1117',
+        height=250,
+        margin=dict(l=50, r=50, t=30, b=30),
+        title=dict(text='Price vs ML Prediction', font=dict(color='white', size=14)),
+        showlegend=True,
+        legend=dict(orientation='h', y=1.1)
+    )
+    
+    fig.update_xaxes(gridcolor='#1a1f2e', title='Periods')
+    fig.update_yaxes(gridcolor='#1a1f2e', title='Price')
+    
+    return fig
 
 
-def render_signal_card(setup: TradeSetup):
-    """Render the signal card with trade details."""
+# ============================================================================
+# UI COMPONENTS - Using Streamlit native components
+# ============================================================================
+def render_signal_card_native(setup: TradeSetup):
+    """Render signal card using native Streamlit components."""
     
-    direction_class = setup.direction.lower()
+    # Signal direction with color
+    if setup.direction == "LONG":
+        st.success(f"🟢 **{setup.direction}** Signal")
+    elif setup.direction == "SHORT":
+        st.error(f"🔴 **{setup.direction}** Signal")
+    else:
+        st.warning(f"⚪ **{setup.direction}** Signal")
     
-    st.markdown(f"""
-    <div class="signal-card {direction_class}">
-        <div class="signal-direction {direction_class}">
-            {'🟢' if setup.direction == 'LONG' else '🔴' if setup.direction == 'SHORT' else '⚪'} 
-            {setup.direction}
-        </div>
-        
-        <div class="signal-level">
-            <span class="signal-label">Entry Price</span>
-            <span class="signal-value">${setup.entry_price:.2f}</span>
-        </div>
-        
-        <div class="signal-level">
-            <span class="signal-label">Target</span>
-            <span class="signal-value target">${setup.target_price:.2f} ({setup.target_pct:+.1f}%)</span>
-        </div>
-        
-        <div class="signal-level">
-            <span class="signal-label">Stop Loss</span>
-            <span class="signal-value stop">${setup.stop_loss:.2f} ({setup.stop_pct:+.1f}%)</span>
-        </div>
-        
-        <div class="signal-level">
-            <span class="signal-label">Risk/Reward</span>
-            <span class="signal-value">1:{setup.risk_reward_ratio:.1f}</span>
-        </div>
-        
-        <div class="signal-level">
-            <span class="signal-label">Confidence</span>
-            <span class="signal-value">{setup.confidence:.0%}</span>
-        </div>
-        
-        <div class="signal-level">
-            <span class="signal-label">Duration</span>
-            <span class="signal-value">{setup.duration}</span>
-        </div>
-        
-        <div class="signal-level">
-            <span class="signal-label">Position Size</span>
-            <span class="signal-value">{setup.position_size} shares</span>
-        </div>
-        
-        <div class="signal-level">
-            <span class="signal-label">Risk Amount</span>
-            <span class="signal-value">${setup.risk_amount:.2f}</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    # Metrics in columns
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Entry", f"${setup.entry_price:.2f}")
+        st.metric("Stop Loss", f"${setup.stop_loss:.2f}", f"{setup.stop_pct:+.1f}%")
+        st.metric("R:R Ratio", f"1:{setup.risk_reward_ratio:.1f}")
+    
+    with col2:
+        st.metric("Target", f"${setup.target_price:.2f}", f"{setup.target_pct:+.1f}%")
+        st.metric("Confidence", f"{setup.confidence:.0%}")
+        st.metric("Duration", setup.duration)
+    
+    st.divider()
+    
+    # Position sizing
+    st.write(f"**Position Size:** {setup.position_size} shares")
+    st.write(f"**Risk Amount:** ${setup.risk_amount:.2f}")
 
 
 def render_positions_table():
-    """Render open positions table."""
-    positions = trading_station.positions
+    """Render open positions using native Streamlit."""
+    st.subheader("📊 Open Positions")
     
-    st.markdown('<div class="positions-header">📊 Open Positions</div>', unsafe_allow_html=True)
+    positions = trading_station.positions
     
     if not positions:
         st.info("No open positions. Generate a signal and click BUY to open a position.")
         return
     
     for pos in positions:
-        pnl_class = "pnl-positive" if pos.unrealized_pnl >= 0 else "pnl-negative"
-        
-        cols = st.columns([2, 1, 1, 1, 1, 1])
-        with cols[0]:
-            st.write(f"**{pos.ticker}** ({pos.direction})")
-        with cols[1]:
-            st.write(f"{pos.quantity} shares")
-        with cols[2]:
-            st.write(f"${pos.entry_price:.2f}")
-        with cols[3]:
-            st.write(f"${pos.current_price:.2f}")
-        with cols[4]:
-            color = "#00d4aa" if pos.unrealized_pnl >= 0 else "#ff4757"
-            st.markdown(f'<span style="color: {color}; font-weight: bold;">${pos.unrealized_pnl:+.2f}</span>', unsafe_allow_html=True)
-        with cols[5]:
-            if st.button("CLOSE", key=f"close_{pos.id}"):
-                trading_station.close_position(pos.id, "MANUAL")
-                st.rerun()
+        with st.container():
+            cols = st.columns([2, 1, 1, 1, 1, 1])
+            with cols[0]:
+                st.write(f"**{pos.ticker}** ({pos.direction})")
+            with cols[1]:
+                st.write(f"{pos.quantity} shares")
+            with cols[2]:
+                st.write(f"Entry: ${pos.entry_price:.2f}")
+            with cols[3]:
+                st.write(f"Current: ${pos.current_price:.2f}")
+            with cols[4]:
+                pnl_color = "green" if pos.unrealized_pnl >= 0 else "red"
+                st.markdown(f":{pnl_color}[**${pos.unrealized_pnl:+.2f}**]")
+            with cols[5]:
+                if st.button("CLOSE", key=f"close_{pos.id}"):
+                    trading_station.close_position(pos.id, "MANUAL")
+                    st.rerun()
 
 
-def render_analytics_bar():
-    """Render portfolio analytics footer."""
+def render_analytics():
+    """Render portfolio analytics."""
     analytics = trading_station.get_analytics()
     
-    st.markdown(f"""
-    <div class="analytics-bar">
-        <div class="analytics-item">
-            <div class="analytics-value">${analytics['closed_pnl']:+.2f}</div>
-            <div class="analytics-label">Realized P&L</div>
-        </div>
-        <div class="analytics-item">
-            <div class="analytics-value">${analytics['open_pnl']:+.2f}</div>
-            <div class="analytics-label">Unrealized P&L</div>
-        </div>
-        <div class="analytics-item">
-            <div class="analytics-value">{analytics['win_rate']:.0f}%</div>
-            <div class="analytics-label">Win Rate</div>
-        </div>
-        <div class="analytics-item">
-            <div class="analytics-value">{analytics['total_trades']}</div>
-            <div class="analytics-label">Total Trades</div>
-        </div>
-        <div class="analytics-item">
-            <div class="analytics-value">{analytics['profit_factor']:.1f}</div>
-            <div class="analytics-label">Profit Factor</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    cols = st.columns(5)
+    with cols[0]:
+        st.metric("Portfolio Value", f"${analytics['total_value']:,.2f}")
+    with cols[1]:
+        st.metric("Realized P&L", f"${analytics['closed_pnl']:+.2f}")
+    with cols[2]:
+        st.metric("Open P&L", f"${analytics['open_pnl']:+.2f}")
+    with cols[3]:
+        st.metric("Win Rate", f"{analytics['win_rate']:.0f}%")
+    with cols[4]:
+        st.metric("Profit Factor", f"{analytics['profit_factor']:.1f}")
 
 
 # ============================================================================
 # MAIN APP
 # ============================================================================
 def main():
-    # Non-blocking auto-refresh (runs in background)
+    # Non-blocking auto-refresh
     st_autorefresh(interval=15000, limit=None, key="live_refresh")
     
     # Initialize session state
@@ -436,20 +280,22 @@ def main():
     if 'timeframe' not in st.session_state:
         st.session_state['timeframe'] = Timeframe.H1
     
-    # === TOP CONTROLS ===
-    control_cols = st.columns([2, 2, 1, 5])
+    # === HEADER ===
+    st.title("📈 TradeSense Pro")
     
-    with control_cols[0]:
+    # === TOP CONTROLS ===
+    col1, col2, col3, col4 = st.columns([2, 2, 1, 5])
+    
+    with col1:
         ticker_input = st.text_input(
             "Ticker", 
             value=st.session_state['current_ticker'],
-            label_visibility="collapsed",
             placeholder="Enter ticker..."
         )
         if ticker_input != st.session_state['current_ticker']:
             st.session_state['current_ticker'] = ticker_input.upper()
     
-    with control_cols[1]:
+    with col2:
         timeframe_map = {
             "5 Min": Timeframe.M5,
             "15 Min": Timeframe.M15,
@@ -457,16 +303,11 @@ def main():
             "4 Hour": Timeframe.H4,
             "Daily": Timeframe.D1,
         }
-        tf_label = st.selectbox(
-            "Timeframe",
-            list(timeframe_map.keys()),
-            index=2,
-            label_visibility="collapsed"
-        )
+        tf_label = st.selectbox("Timeframe", list(timeframe_map.keys()), index=2)
         st.session_state['timeframe'] = timeframe_map[tf_label]
     
-    with control_cols[2]:
-        st.markdown('<span class="live-dot"></span> LIVE', unsafe_allow_html=True)
+    with col3:
+        st.markdown('<p class="live-indicator">🔴 LIVE</p>', unsafe_allow_html=True)
     
     ticker = st.session_state['current_ticker']
     timeframe = st.session_state['timeframe']
@@ -479,13 +320,24 @@ def main():
             st.error(f"No data available for {ticker}")
             return
         
-        current_price = df['Close'].iloc[-1]
-        prev_price = df['Close'].iloc[-2] if len(df) > 1 else current_price
+        current_price = float(df['Close'].iloc[-1])
+        prev_price = float(df['Close'].iloc[-2]) if len(df) > 1 else current_price
         change_pct = ((current_price - prev_price) / prev_price) * 100
         
         # Generate timeframe-aware signal
         setup = timeframe_signal_generator.generate(ticker, timeframe)
         setup.set_portfolio_context(trading_station.total_value)
+        
+        # Get ML predictions for chart
+        try:
+            feature_engineer = FeatureEngineer()
+            features_df = feature_engineer.calculate_features(df, include_targets=False)
+            if not features_df.empty:
+                predictions = ensemble_model.predict(df).get('probability', 0.5)
+            else:
+                predictions = None
+        except:
+            predictions = None
         
         # Update position prices
         trading_station.update_prices({ticker: current_price})
@@ -495,29 +347,47 @@ def main():
         logger.error(f"Data error: {e}")
         return
     
-    # === HEADER ===
-    render_header(ticker, current_price, change_pct, trading_station.total_value)
+    # === PRICE INFO ===
+    price_cols = st.columns([1, 1, 1, 4])
+    with price_cols[0]:
+        st.metric("Current Price", f"${current_price:.2f}", f"{change_pct:+.2f}%")
+    with price_cols[1]:
+        st.metric("Portfolio", f"${trading_station.total_value:,.2f}")
+    
+    st.divider()
     
     # === MAIN CONTENT: CHART + SIGNAL ===
     chart_col, signal_col = st.columns([7, 3])
     
     with chart_col:
-        fig = create_candlestick_chart(df, setup)
-        st.plotly_chart(fig, use_container_width=True)
+        # Tab for Price Chart and Prediction Chart
+        tab1, tab2 = st.tabs(["📊 Price Chart", "🤖 ML Prediction"])
+        
+        with tab1:
+            fig = create_candlestick_chart(df, setup)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with tab2:
+            pred_fig = create_prediction_chart(df, predictions)
+            st.plotly_chart(pred_fig, use_container_width=True)
+            st.caption("Orange dashed line shows ML model's bullish/bearish trend prediction.")
     
     with signal_col:
-        render_signal_card(setup)
+        render_signal_card_native(setup)
         
-        st.markdown("<br>", unsafe_allow_html=True)
+        st.divider()
         
         # Trade execution buttons
         btn_cols = st.columns(2)
         with btn_cols[0]:
-            if st.button("🟢 BUY", use_container_width=True, disabled=setup.direction == "HOLD"):
+            buy_disabled = setup.direction == "HOLD"
+            if st.button("🟢 BUY", use_container_width=True, disabled=buy_disabled, type="primary"):
                 position = trading_station.execute(setup)
                 if position:
                     st.success(f"Opened {position.direction} {position.quantity} {position.ticker}")
                     st.rerun()
+                else:
+                    st.warning("Could not execute trade. Check logs.")
         
         with btn_cols[1]:
             if st.button("🔴 SELL ALL", use_container_width=True):
@@ -527,17 +397,18 @@ def main():
         
         # Reasons
         if setup.reasons:
-            st.markdown("---")
-            st.markdown("**Signal Reasoning:**")
+            st.divider()
+            st.write("**Signal Reasoning:**")
             for reason in setup.reasons[:5]:
-                st.markdown(f"• {reason}")
+                st.write(f"• {reason}")
     
     # === POSITIONS TABLE ===
-    st.markdown("---")
+    st.divider()
     render_positions_table()
     
     # === ANALYTICS BAR ===
-    render_analytics_bar()
+    st.divider()
+    render_analytics()
 
 
 if __name__ == "__main__":

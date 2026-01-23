@@ -1,16 +1,22 @@
 {
   "starting_capital": 10000.0,
-  "cash": 19.179901123046875,
+  "cash": 10000.0,
   "trade_counter": 1,
-  "positions": [
+  "positions": [],
+  "closed_trades": [
     {
       "id": "P00001",
       "ticker": "NVDA",
       "direction": "LONG",
       "quantity": 54,
       "entry_price": 184.8300018310547,
-      "target_price": 187.57,
-      "stop_price": 183.46,
+      "exit_price": 184.8300018310547,
       "entry_time": "2026-01-23T00:18:35.061742",
-      "timeframe": "1 Hour",
-      "confidence": 
+      "exit_time": "2026-01-23T00:38:48.267400",
+      "exit_reason": "MANUAL",
+      "realized_pnl": 0.0,
+      "realized_pnl_pct": 0.0,
+      "timeframe": "1 Hour"
+    }
+  ]
+}
