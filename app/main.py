@@ -27,7 +27,7 @@ from src.data.fetcher_fundamentals import fundamentals_fetcher
 from src.signals import signal_generator
 from src.sentiment.aggregator import sentiment_aggregator
 from src.sentiment.reddit import reddit_sentiment
-from src.ml import FeatureEngineer, signal_model
+from src.ml import FeatureEngineer, signal_model, Timeframe, mtf_engine
 from src.trading.paper_trading import paper_trader
 import json
 
@@ -851,12 +851,23 @@ def main():
     </div>
     ''', unsafe_allow_html=True)
     
-    # Search bar
-    search_col, spacer = st.columns([1, 5])
+    # Search bar with timeframe selector
+    search_col, tf_col, spacer = st.columns([1, 1, 4])
     with search_col:
         ticker_input = st.text_input("", value="AAPL", placeholder="Ticker...", label_visibility="collapsed")
         if st.button("ANALYZE", use_container_width=True):
             st.session_state['current_ticker'] = ticker_input
+    
+    with tf_col:
+        timeframe_options = {
+            "5 Min (Scalping)": Timeframe.M5,
+            "15 Min (Day Trade)": Timeframe.M15,
+            "1 Hour (Intraday)": Timeframe.H1,
+            "4 Hour (Swing)": Timeframe.H4,
+            "Daily (Position)": Timeframe.D1
+        }
+        selected_tf_label = st.selectbox("Timeframe", list(timeframe_options.keys()), index=4, label_visibility="collapsed")
+        selected_timeframe = timeframe_options[selected_tf_label]
     
     current_ticker = st.session_state.get('current_ticker', 'AAPL')
     

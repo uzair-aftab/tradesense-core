@@ -1,0 +1,11 @@
+[
+  {
+    "ticker": "AAPL",
+    "timestamp": "2026-01-22T20:41:59.729992",
+    "price_at_prediction": 248.35000610351562,
+    "predicted_direction": "HOLD",
+    "confidence": 0.17099802385392415,
+    "actual_price_3d": null,
+    "correct": null
+  }
+]
