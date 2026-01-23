@@ -1,0 +1,8 @@
+{
+  "input_size": 39,
+  "hidden_size": 128,
+  "num_layers": 2,
+  "sequence_length": 30,
+  "dropout": 0.3,
+  "learning_rate": 0.001
+}
