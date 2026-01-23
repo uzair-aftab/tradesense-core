@@ -973,12 +973,24 @@ def main():
             render_fundamental_panel(current_ticker)
         
         with st.expander("🤖 ML Model Info", expanded=False):
-            st.markdown('''
+            from src.ml import signal_model, lstm_model, transformer_model, ensemble_model, FeatureEngineer
+            
+            # Active models status
+            models_status = []
+            if signal_model.is_trained: models_status.append(f"XGB ({ensemble_model.xgb_weight:.0%})")
+            if lstm_model.is_trained: models_status.append(f"LSTM ({ensemble_model.lstm_weight:.0%})")
+            if transformer_model.is_trained: models_status.append(f"TF ({ensemble_model.transformer_weight:.0%})")
+            
+            active_str = ", ".join(models_status) if models_status else "No models loaded"
+            feature_count = len(FeatureEngineer().feature_columns)
+            
+            st.markdown(f'''
             <div class="scroll-panel">
-                <div class="panel-row"><span class="panel-label">Model</span><span class="panel-value">XGBoost</span></div>
-                <div class="panel-row"><span class="panel-label">Window</span><span class="panel-value">3 days</span></div>
-                <div class="panel-row"><span class="panel-label">Features</span><span class="panel-value">17</span></div>
-                <div class="panel-row"><span class="panel-label">Accuracy</span><span class="panel-value">~70%</span></div>
+                <div class="panel-row"><span class="panel-label">Ensemble</span><span class="panel-value">{active_str}</span></div>
+                <div class="panel-row"><span class="panel-label">Features</span><span class="panel-value">{feature_count} (v2)</span></div>
+                <div class="panel-row"><span class="panel-label">XGBoost</span><span class="panel-value">{"✅ Active" if signal_model.is_trained else "❌ Inactive"}</span></div>
+                <div class="panel-row"><span class="panel-label">LSTM (GPU)</span><span class="panel-value">{"✅ Active" if lstm_model.is_trained else "❌ Inactive"}</span></div>
+                <div class="panel-row"><span class="panel-label">Transformer</span><span class="panel-value">{"✅ Active" if transformer_model.is_trained else "❌ Inactive"}</span></div>
             </div>
             ''', unsafe_allow_html=True)
         

@@ -11,6 +11,7 @@ import pandas as pd
 
 from src.ml.models import signal_model
 from src.ml.lstm_model import lstm_model, LSTMModel
+from src.ml.transformer_model import transformer_model
 from src.ml.feature_engineer import FeatureEngineer
 from src.utils.logger import get_logger
 
@@ -19,48 +20,34 @@ logger = get_logger(__name__)
 
 class EnsembleModel:
     """
-    Combines XGBoost (tabular) and LSTM (sequential) predictions.
+    Combines XGBoost, LSTM, and Transformer predictions.
     
     Weighted ensemble:
-    - XGBoost: Good for feature importance, handles irregular data
-    - LSTM: Good for sequential patterns, temporal dependencies
-    
-    Example:
-        >>> ensemble = EnsembleModel()
-        >>> prob = ensemble.predict(features_df)
+    - XGBoost: Tabular features (40%)
+    - LSTM: Sequential patterns (30%)
+    - Transformer: Long-range attention (30%)
     """
     
     def __init__(
         self,
-        xgb_weight: float = 0.6,
-        lstm_weight: float = 0.4,
+        xgb_weight: float = 0.4,
+        lstm_weight: float = 0.3,
+        transformer_weight: float = 0.3,
         sequence_length: int = 30
     ):
-        """
-        Args:
-            xgb_weight: Weight for XGBoost predictions
-            lstm_weight: Weight for LSTM predictions
-            sequence_length: Sequence length for LSTM
-        """
         self.xgb_weight = xgb_weight
         self.lstm_weight = lstm_weight
+        self.transformer_weight = transformer_weight
         self.sequence_length = sequence_length
         self.feature_engineer = FeatureEngineer()
     
     def predict(
         self,
         df: pd.DataFrame,
-        use_lstm: bool = True
+        use_deep_learning: bool = True
     ) -> Dict:
         """
-        Get ensemble prediction for a ticker's data.
-        
-        Args:
-            df: OHLCV DataFrame
-            use_lstm: Whether to include LSTM (if trained)
-            
-        Returns:
-            Dict with predictions and details
+        Get ensemble prediction.
         """
         # Calculate features
         features_df = self.feature_engineer.calculate_features(df)
@@ -70,46 +57,51 @@ class EnsembleModel:
                 "probability": 0.5,
                 "signal": "HOLD",
                 "confidence": 0.0,
-                "xgb_prob": 0.5,
-                "lstm_prob": 0.5,
-                "ensemble_type": "none"
+                "components": {"xgb": 0.5, "lstm": None, "transformer": None}
             }
         
-        # Get latest features for XGBoost
-        X_latest = features_df[self.feature_engineer.feature_columns].iloc[-1:]
-        
         # XGBoost prediction
+        X_latest = features_df[self.feature_engineer.feature_columns].iloc[-1:]
         try:
             xgb_prob = signal_model.predict_proba(X_latest)[0]
-        except Exception as e:
-            logger.warning(f"XGBoost prediction failed: {e}")
+        except Exception:
             xgb_prob = 0.5
         
-        # LSTM prediction
+        # Deep Learning predictions
         lstm_prob = 0.5
-        lstm_used = False
+        tf_prob = 0.5
+        dl_active = False
         
-        if use_lstm and lstm_model.is_trained:
+        if use_deep_learning and (lstm_model.is_trained or transformer_model.is_trained):
             try:
-                # Get sequence for LSTM
                 X_full = features_df[self.feature_engineer.feature_columns].values
                 if len(X_full) >= self.sequence_length:
                     X_sequence = X_full[-self.sequence_length:]
-                    lstm_prob = lstm_model.predict_single(X_sequence)
-                    lstm_used = True
+                    
+                    if lstm_model.is_trained:
+                        lstm_prob = lstm_model.predict_single(X_sequence)
+                        dl_active = True
+                        
+                    if transformer_model.is_trained:
+                        tf_prob = transformer_model.predict_single(X_sequence)
+                        dl_active = True
             except Exception as e:
-                logger.warning(f"LSTM prediction failed: {e}")
+                logger.warning(f"DL prediction failed: {e}")
         
-        # Combine predictions
-        if lstm_used:
-            ensemble_prob = (
-                self.xgb_weight * xgb_prob + 
-                self.lstm_weight * lstm_prob
-            )
-            ensemble_type = "xgb+lstm"
-        else:
-            ensemble_prob = xgb_prob
-            ensemble_type = "xgb_only"
+        # Normalize weights based on active models
+        w_xgb = self.xgb_weight
+        w_lstm = self.lstm_weight if lstm_model.is_trained and dl_active else 0
+        w_tf = self.transformer_weight if transformer_model.is_trained and dl_active else 0
+        
+        total_weight = w_xgb + w_lstm + w_tf
+        if total_weight == 0:
+            return {"probability": 0.5, "signal": "HOLD", "confidence": 0.0}
+            
+        ensemble_prob = (
+            w_xgb * xgb_prob + 
+            w_lstm * lstm_prob + 
+            w_tf * tf_prob
+        ) / total_weight
         
         # Determine signal
         if ensemble_prob > 0.6:
@@ -126,27 +118,26 @@ class EnsembleModel:
             "probability": ensemble_prob,
             "signal": signal,
             "confidence": confidence,
-            "xgb_prob": xgb_prob,
-            "lstm_prob": lstm_prob if lstm_used else None,
-            "lstm_used": lstm_used,
-            "ensemble_type": ensemble_type,
+            "components": {
+                "xgb": xgb_prob,
+                "lstm": lstm_prob if w_lstm > 0 else None,
+                "transformer": tf_prob if w_tf > 0 else None
+            },
             "weights": {
-                "xgb": self.xgb_weight,
-                "lstm": self.lstm_weight if lstm_used else 0
+                "xgb": w_xgb / total_weight,
+                "lstm": w_lstm / total_weight,
+                "transformer": w_tf / total_weight
             }
         }
     
     def predict_proba(self, df: pd.DataFrame) -> float:
-        """Get ensemble probability (convenience method)."""
-        result = self.predict(df)
-        return result["probability"]
+        return self.predict(df)["probability"]
     
-    def set_weights(self, xgb_weight: float, lstm_weight: float):
-        """Update ensemble weights."""
-        total = xgb_weight + lstm_weight
-        self.xgb_weight = xgb_weight / total
-        self.lstm_weight = lstm_weight / total
-        logger.info(f"Ensemble weights: XGB={self.xgb_weight:.2f}, LSTM={self.lstm_weight:.2f}")
+    def set_weights(self, xgb: float, lstm: float, tf: float):
+        total = xgb + lstm + tf
+        self.xgb_weight = xgb / total
+        self.lstm_weight = lstm / total
+        self.transformer_weight = tf / total
 
 
 # Singleton instance
