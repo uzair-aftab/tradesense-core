@@ -138,6 +138,56 @@ st.markdown("""
     
     #MainMenu, footer, header {visibility: hidden;}
     
+    /* ===== LOGO HEADER ===== */
+    .logo-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 0;
+        margin-bottom: 15px;
+        border-bottom: 1px solid #333;
+    }
+    .logo-title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    .logo-icon {
+        font-size: 36px;
+    }
+    .logo-text {
+        font-family: 'JetBrains Mono';
+        font-size: 28px;
+        font-weight: 700;
+        background: linear-gradient(135deg, #00ff88 0%, #00aaff 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    .logo-tagline {
+        font-size: 11px;
+        color: #666;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+    }
+    .api-status {
+        display: flex;
+        gap: 16px;
+        font-size: 10px;
+    }
+    .api-badge {
+        background: #1a1a1a;
+        border: 1px solid #333;
+        border-radius: 4px;
+        padding: 4px 10px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .api-name { color: #888; }
+    .api-count { color: #00ff88; font-family: 'JetBrains Mono'; }
+    .api-limit { color: #666; }
+    
     /* ===== SIGNAL LIST ===== */
     .signal-list {
         background: var(--bg-card);
@@ -776,7 +826,32 @@ def get_top_signals():
 
 
 def main():
-    # Search bar - minimal
+    # LOGO HEADER WITH API STATUS
+    st.markdown('''
+    <div class="logo-header">
+        <div class="logo-title">
+            <span class="logo-icon">📈</span>
+            <div>
+                <div class="logo-text">TradeSense Pro</div>
+                <div class="logo-tagline">AI-Powered Trading Signals</div>
+            </div>
+        </div>
+        <div class="api-status">
+            <div class="api-badge">
+                <span class="api-name">Finnhub</span>
+                <span class="api-count">60</span>
+                <span class="api-limit">/min</span>
+            </div>
+            <div class="api-badge">
+                <span class="api-name">Marketaux</span>
+                <span class="api-count">100</span>
+                <span class="api-limit">/day</span>
+            </div>
+        </div>
+    </div>
+    ''', unsafe_allow_html=True)
+    
+    # Search bar
     search_col, spacer = st.columns([1, 5])
     with search_col:
         ticker_input = st.text_input("", value="AAPL", placeholder="Ticker...", label_visibility="collapsed")
