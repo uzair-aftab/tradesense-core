@@ -26,8 +26,74 @@ from src.data import stock_fetcher
 from src.data.fetcher_fundamentals import fundamentals_fetcher
 from src.signals import signal_generator
 from src.sentiment.aggregator import sentiment_aggregator
+from src.sentiment.reddit import reddit_sentiment
 from src.ml import FeatureEngineer, signal_model
 from src.trading.paper_trading import paper_trader
+import json
+
+# Prediction tracking storage
+TRACK_FILE = "data/tracked_predictions.json"
+
+def save_prediction(ticker: str, price: float, predicted_direction: str, confidence: float):
+    """Save current prediction for later comparison."""
+    predictions = load_predictions()
+    
+    prediction = {
+        'ticker': ticker,
+        'timestamp': datetime.now().isoformat(),
+        'price_at_prediction': price,
+        'predicted_direction': predicted_direction,
+        'confidence': confidence,
+        'actual_price_3d': None,  # Will be filled later
+        'correct': None
+    }
+    
+    predictions.append(prediction)
+    
+    # Keep last 100 predictions
+    predictions = predictions[-100:]
+    
+    os.makedirs(os.path.dirname(TRACK_FILE), exist_ok=True)
+    with open(TRACK_FILE, 'w') as f:
+        json.dump(predictions, f, indent=2)
+    
+    return prediction
+
+def load_predictions():
+    """Load saved predictions."""
+    if not os.path.exists(TRACK_FILE):
+        return []
+    try:
+        with open(TRACK_FILE, 'r') as f:
+            return json.load(f)
+    except:
+        return []
+
+def check_predictions(current_prices: dict):
+    """Check old predictions against current prices."""
+    predictions = load_predictions()
+    updated = False
+    
+    for pred in predictions:
+        if pred['actual_price_3d'] is None:
+            # Check if 3 days have passed
+            pred_time = datetime.fromisoformat(pred['timestamp'])
+            if datetime.now() - pred_time >= timedelta(days=3):
+                ticker = pred['ticker']
+                if ticker in current_prices:
+                    pred['actual_price_3d'] = current_prices[ticker]
+                    # Check if prediction was correct
+                    if pred['predicted_direction'] == 'UP':
+                        pred['correct'] = current_prices[ticker] > pred['price_at_prediction']
+                    else:
+                        pred['correct'] = current_prices[ticker] < pred['price_at_prediction']
+                    updated = True
+    
+    if updated:
+        with open(TRACK_FILE, 'w') as f:
+            json.dump(predictions, f, indent=2)
+    
+    return predictions
 
 # ============================================================================
 # PAGE CONFIG
@@ -242,27 +308,52 @@ st.markdown("""
     .quota-name { color: var(--text-gray); }
     .quota-val { color: var(--text-white); font-family: 'JetBrains Mono'; }
     
-    /* ===== EXPANDERS - FIXED COLORS ===== */
-    .streamlit-expanderHeader {
+    /* ===== EXPANDERS - FIXED COLORS FOR ALL STATES ===== */
+    /* Base header style */
+    .streamlit-expanderHeader,
+    [data-testid="stExpander"] > div:first-child,
+    [data-testid="stExpander"] summary {
         background: var(--bg-card) !important;
         color: var(--text-white) !important;
         border: 1px solid var(--border) !important;
         border-radius: 6px !important;
     }
-    .streamlit-expanderHeader:hover {
+    
+    /* Hover state */
+    .streamlit-expanderHeader:hover,
+    [data-testid="stExpander"] > div:first-child:hover,
+    [data-testid="stExpander"] summary:hover {
         background: var(--bg-hover) !important;
         color: var(--text-white) !important;
     }
-    .streamlit-expanderContent {
+    
+    /* Expanded content */
+    .streamlit-expanderContent,
+    [data-testid="stExpander"] > div:last-child {
         background: var(--bg-card) !important;
         color: var(--text-white) !important;
         border: 1px solid var(--border) !important;
         border-top: none !important;
     }
-    details summary {
+    
+    /* Summary text in all states */
+    details summary,
+    details[open] summary,
+    [data-testid="stExpander"] summary span,
+    [data-testid="stExpander"] summary p {
         color: var(--text-white) !important;
     }
-    details[open] summary {
+    
+    /* Expander icon */
+    [data-testid="stExpander"] svg {
+        fill: var(--text-white) !important;
+        color: var(--text-white) !important;
+    }
+    
+    /* Text inside expander */
+    [data-testid="stExpander"] p,
+    [data-testid="stExpander"] span,
+    [data-testid="stExpander"] div {
         color: var(--text-white) !important;
     }
     
@@ -534,8 +625,9 @@ def render_score_breakdown(signal):
 
 
 def render_sentiment_panel(ticker: str):
-    """Sentiment panel with error handling."""
+    """Sentiment panel with Reddit mentions."""
     try:
+        # Get sentiment from aggregator
         sent = sentiment_aggregator.get_sentiment(ticker)
         
         overall = sent.get('overall_score', 0)
@@ -545,6 +637,15 @@ def render_sentiment_panel(ticker: str):
         
         signal_text = "Bullish" if signal == True else "Bearish" if signal == False else "Neutral"
         signal_color = "#00ff88" if signal == True else "#ff4444" if signal == False else "#ffcc00"
+        
+        # Get Reddit data from ApeWisdom
+        try:
+            reddit_data = reddit_sentiment.get_mentions(ticker)
+            reddit_mentions = reddit_data.get('mentions', 0)
+            reddit_rank = reddit_data.get('rank', 'N/A')
+        except:
+            reddit_mentions = 0
+            reddit_rank = 'N/A'
         
         st.markdown(f'''
         <div class="scroll-panel">
@@ -559,6 +660,14 @@ def render_sentiment_panel(ticker: str):
             <div class="panel-row">
                 <span class="panel-label">Confidence</span>
                 <span class="panel-value">{confidence:.0%}</span>
+            </div>
+            <div class="panel-row">
+                <span class="panel-label">Reddit Mentions</span>
+                <span class="panel-value">{reddit_mentions}</span>
+            </div>
+            <div class="panel-row">
+                <span class="panel-label">Reddit Rank</span>
+                <span class="panel-value">#{reddit_rank if reddit_rank else 'N/A'}</span>
             </div>
             <div class="panel-row">
                 <span class="panel-label">Sources</span>
@@ -746,6 +855,23 @@ def main():
                     <div class="metric-lbl">Accuracy</div>
                 </div>
                 ''', unsafe_allow_html=True)
+        
+        # Track button
+        track_col1, track_col2 = st.columns([1, 3])
+        with track_col1:
+            predicted_dir = "UP" if signal.signal_type.value == "BUY" else "DOWN" if signal.signal_type.value == "SELL" else "HOLD"
+            if st.button("🔴 TRACK", use_container_width=True):
+                save_prediction(current_ticker, current_price, predicted_dir, signal.confidence)
+                st.success(f"Tracking {current_ticker} @ ${current_price:.2f} - Predicted: {predicted_dir}")
+        
+        with track_col2:
+            # Show tracked prediction stats
+            predictions = load_predictions()
+            verified = [p for p in predictions if p['correct'] is not None]
+            if verified:
+                correct = sum(1 for p in verified if p['correct'])
+                track_accuracy = (correct / len(verified)) * 100 if verified else 0
+                st.markdown(f"**Tracked: {len(predictions)}** | **Verified: {len(verified)}** | **Accuracy: {track_accuracy:.0f}%**")
     
     # === RIGHT ===
     with right_col:
