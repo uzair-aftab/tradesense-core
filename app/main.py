@@ -1,14 +1,13 @@
 """
-TradeSense Pro v4 - Polished UI with Full API Integration
+TradeSense Pro v5 - Complete Trading Dashboard
 
 Fixes:
-- Compact Top Signals with signal labels (Strong Buy, etc.)
-- Cleaner metrics row layout
-- Better Prediction vs Actual charts
-- Track button for live prediction
-- Scrollable Sentiment/Fundamental panels
-- API quota display
-- Fixed expander fonts
+- Removed empty box at top
+- Centered metrics with equal sizing
+- Fixed prediction chart (actual vs predicted price lines)
+- Fixed expander header colors
+- Fixed sentiment aggregator error  
+- Added Paper Trading module
 """
 
 import streamlit as st
@@ -23,12 +22,12 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.data import stock_fetcher, watchlist
+from src.data import stock_fetcher
 from src.data.fetcher_fundamentals import fundamentals_fetcher
 from src.signals import signal_generator
-from src.sentiment import sentiment_aggregator
+from src.sentiment.aggregator import sentiment_aggregator
 from src.ml import FeatureEngineer, signal_model
-from src.config import config
+from src.trading.paper_trading import paper_trader
 
 # ============================================================================
 # PAGE CONFIG
@@ -42,33 +41,7 @@ st.set_page_config(
 )
 
 # ============================================================================
-# API QUOTA TRACKING
-# ============================================================================
-
-def get_api_quota_info():
-    """Get API quota status."""
-    # Track calls in session state
-    if 'api_calls' not in st.session_state:
-        st.session_state['api_calls'] = {
-            'finnhub': {'count': 0, 'limit': 60, 'reset_time': datetime.now() + timedelta(minutes=1)},
-            'marketaux': {'count': 0, 'limit': 100, 'reset_time': datetime.now() + timedelta(hours=24)}
-        }
-    
-    # Reset if time passed
-    now = datetime.now()
-    if now > st.session_state['api_calls']['finnhub']['reset_time']:
-        st.session_state['api_calls']['finnhub']['count'] = 0
-        st.session_state['api_calls']['finnhub']['reset_time'] = now + timedelta(minutes=1)
-    
-    if now > st.session_state['api_calls']['marketaux']['reset_time']:
-        st.session_state['api_calls']['marketaux']['count'] = 0
-        st.session_state['api_calls']['marketaux']['reset_time'] = now + timedelta(hours=24)
-    
-    return st.session_state['api_calls']
-
-
-# ============================================================================
-# CSS - CLEAN, COMPACT, READABLE
+# CSS - CLEAN, READABLE, FIXED COLORS
 # ============================================================================
 
 st.markdown("""
@@ -80,8 +53,8 @@ st.markdown("""
         --bg-card: #1a1a1a;
         --bg-hover: #252525;
         --text-white: #ffffff;
-        --text-gray: #888888;
-        --text-muted: #555555;
+        --text-gray: #999999;
+        --text-muted: #666666;
         --strong-buy: #00ff88;
         --buy: #66ff99;
         --hold: #ffcc00;
@@ -99,7 +72,7 @@ st.markdown("""
     
     #MainMenu, footer, header {visibility: hidden;}
     
-    /* ===== COMPACT SIGNAL LIST ===== */
+    /* ===== SIGNAL LIST ===== */
     .signal-list {
         background: var(--bg-card);
         border: 1px solid var(--border);
@@ -107,29 +80,29 @@ st.markdown("""
         padding: 12px;
     }
     .signal-list-title {
-        font-size: 11px;
+        font-size: 12px;
         font-weight: 600;
         color: var(--text-gray);
         text-transform: uppercase;
         letter-spacing: 1px;
-        margin-bottom: 8px;
+        margin-bottom: 10px;
     }
     .signal-item {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 6px 8px;
-        margin: 2px 0;
+        padding: 8px 10px;
+        margin: 4px 0;
         border-radius: 4px;
         background: var(--bg-dark);
         font-size: 13px;
     }
     .signal-item:hover { background: var(--bg-hover); cursor: pointer; }
-    .signal-ticker { font-family: 'JetBrains Mono'; font-weight: 600; }
+    .signal-ticker { font-family: 'JetBrains Mono'; font-weight: 600; color: var(--text-white); }
     .signal-label {
         font-size: 10px;
-        font-weight: 600;
-        padding: 2px 6px;
+        font-weight: 700;
+        padding: 3px 8px;
         border-radius: 3px;
         text-transform: uppercase;
     }
@@ -139,45 +112,49 @@ st.markdown("""
     .label-sell { background: var(--sell); color: #000; }
     .label-strong-sell { background: var(--strong-sell); color: #000; }
     
-    /* ===== METRICS ROW ===== */
-    .metrics-row {
+    /* ===== METRICS ROW - CENTERED ===== */
+    .metrics-container {
         display: flex;
-        gap: 12px;
+        justify-content: center;
         align-items: center;
+        gap: 16px;
         margin-bottom: 16px;
+        flex-wrap: wrap;
     }
-    .ticker-name {
-        font-size: 28px;
+    .ticker-display {
+        font-size: 32px;
         font-weight: 700;
         font-family: 'JetBrains Mono';
-        min-width: 100px;
+        color: var(--text-white);
+        margin-right: 20px;
     }
-    .metric-card {
+    .metric-box {
         background: var(--bg-card);
         border: 1px solid var(--border);
-        border-radius: 6px;
-        padding: 8px 16px;
+        border-radius: 8px;
+        padding: 12px 24px;
         text-align: center;
-        min-width: 100px;
+        min-width: 120px;
     }
     .metric-val {
         font-family: 'JetBrains Mono';
-        font-size: 18px;
+        font-size: 20px;
         font-weight: 600;
+        color: var(--text-white);
     }
     .metric-lbl {
         font-size: 10px;
         color: var(--text-gray);
         text-transform: uppercase;
+        margin-top: 2px;
     }
     .metric-sub {
         font-size: 9px;
         color: var(--text-muted);
-        font-style: italic;
     }
-    .green { color: var(--strong-buy); }
-    .red { color: var(--strong-sell); }
-    .yellow { color: var(--hold); }
+    .green { color: var(--strong-buy) !important; }
+    .red { color: var(--strong-sell) !important; }
+    .yellow { color: var(--hold) !important; }
     
     /* ===== MAIN SIGNAL BOX ===== */
     .main-signal {
@@ -186,6 +163,7 @@ st.markdown("""
         border-radius: 8px;
         padding: 16px;
         text-align: center;
+        margin-bottom: 12px;
     }
     .main-signal.buy-border { border-color: var(--strong-buy); }
     .main-signal.sell-border { border-color: var(--strong-sell); }
@@ -196,12 +174,27 @@ st.markdown("""
         font-family: 'JetBrains Mono';
     }
     .signal-conf {
-        font-size: 13px;
+        font-size: 12px;
         color: var(--text-gray);
         margin-top: 4px;
     }
     
-    /* ===== SCORE BARS ===== */
+    /* ===== CARDS ===== */
+    .card {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 10px;
+    }
+    .card-title {
+        font-size: 11px;
+        color: var(--text-gray);
+        text-transform: uppercase;
+        margin-bottom: 8px;
+    }
+    
+    /* ===== SCORE ROWS ===== */
     .score-row {
         display: flex;
         justify-content: space-between;
@@ -210,26 +203,30 @@ st.markdown("""
         border-bottom: 1px solid #222;
         font-size: 13px;
     }
+    .score-row:last-child { border-bottom: none; }
     .score-name { color: var(--text-gray); }
     .score-val { font-family: 'JetBrains Mono'; font-weight: 600; }
     
     /* ===== SCROLLABLE PANEL ===== */
     .scroll-panel {
-        max-height: 200px;
+        max-height: 180px;
         overflow-y: auto;
         background: var(--bg-dark);
         border: 1px solid var(--border);
         border-radius: 6px;
-        padding: 8px;
+        padding: 10px;
     }
     .panel-row {
         display: flex;
         justify-content: space-between;
-        padding: 4px 0;
+        padding: 5px 0;
         font-size: 12px;
         border-bottom: 1px solid #222;
+        color: var(--text-white);
     }
     .panel-row:last-child { border-bottom: none; }
+    .panel-label { color: var(--text-gray); }
+    .panel-value { color: var(--text-white); font-weight: 500; }
     
     /* ===== API QUOTA ===== */
     .quota-bar {
@@ -237,23 +234,55 @@ st.markdown("""
         border: 1px solid var(--border);
         border-radius: 4px;
         padding: 6px 10px;
-        font-size: 11px;
+        font-size: 10px;
         display: flex;
         justify-content: space-between;
-        margin-bottom: 8px;
+        margin-bottom: 6px;
     }
     .quota-name { color: var(--text-gray); }
     .quota-val { color: var(--text-white); font-family: 'JetBrains Mono'; }
     
-    /* ===== EXPANDERS ===== */
+    /* ===== EXPANDERS - FIXED COLORS ===== */
     .streamlit-expanderHeader {
         background: var(--bg-card) !important;
         color: var(--text-white) !important;
-        font-weight: 500 !important;
+        border: 1px solid var(--border) !important;
+        border-radius: 6px !important;
+    }
+    .streamlit-expanderHeader:hover {
+        background: var(--bg-hover) !important;
+        color: var(--text-white) !important;
     }
     .streamlit-expanderContent {
         background: var(--bg-card) !important;
         color: var(--text-white) !important;
+        border: 1px solid var(--border) !important;
+        border-top: none !important;
+    }
+    details summary {
+        color: var(--text-white) !important;
+    }
+    details[open] summary {
+        color: var(--text-white) !important;
+    }
+    
+    /* ===== PAPER TRADING ===== */
+    .portfolio-card {
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        border: 1px solid var(--info);
+        border-radius: 8px;
+        padding: 16px;
+        margin-bottom: 12px;
+    }
+    .portfolio-value {
+        font-size: 24px;
+        font-weight: 700;
+        font-family: 'JetBrains Mono';
+        color: var(--text-white);
+    }
+    .portfolio-return {
+        font-size: 14px;
+        font-weight: 600;
     }
     
     /* ===== BUTTONS ===== */
@@ -307,7 +336,7 @@ def get_signal_color(signal_type):
 # ============================================================================
 
 def create_price_chart(df: pd.DataFrame, ticker: str) -> go.Figure:
-    """Clean candlestick chart."""
+    """Clean candlestick chart with volume."""
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
                         vertical_spacing=0.03, row_heights=[0.8, 0.2])
     
@@ -318,102 +347,100 @@ def create_price_chart(df: pd.DataFrame, ticker: str) -> go.Figure:
         decreasing=dict(line=dict(color='#ff4444', width=1), fillcolor='#ff4444')
     ), row=1, col=1)
     
-    colors = ['rgba(0,255,136,0.3)' if c >= o else 'rgba(255,68,68,0.3)' for c, o in zip(df['Close'], df['Open'])]
+    colors = ['rgba(0,255,136,0.4)' if c >= o else 'rgba(255,68,68,0.4)' for c, o in zip(df['Close'], df['Open'])]
     fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=colors), row=2, col=1)
     
     fig.update_layout(
         template='plotly_dark', paper_bgcolor='#0d0d0d', plot_bgcolor='#0d0d0d',
-        height=400, margin=dict(l=0, r=0, t=0, b=0),
+        height=380, margin=dict(l=0, r=0, t=0, b=0),
         xaxis_rangeslider_visible=False, showlegend=False,
-        font=dict(family="JetBrains Mono", color="#fff", size=10)
+        font=dict(family="JetBrains Mono", color="#888", size=10)
     )
     fig.update_xaxes(gridcolor='#222', showgrid=True)
     fig.update_yaxes(gridcolor='#222', showgrid=True)
     return fig
 
 
-def create_prediction_comparison_chart(df: pd.DataFrame) -> tuple:
-    """Create chart showing predicted vs actual PRICE (not probability)."""
+def create_prediction_chart(df: pd.DataFrame) -> tuple:
+    """Create chart with BOTH actual and predicted PRICE lines."""
     engineer = FeatureEngineer()
     features_df = engineer.calculate_features(df.copy(), include_targets=False)
     
-    if features_df.empty:
+    if features_df.empty or not signal_model.is_trained:
         return None, None
     
-    # Get ML predictions (probability of price going up)
+    # Get ML predictions
     X = features_df[engineer.feature_columns]
-    
-    if not signal_model.is_trained:
-        try:
-            signal_model.load()
-        except:
-            return None, None
-    
     probs = signal_model.predict_proba(X)
     
     # Get actual close prices
     close = df['Close'].loc[features_df.index]
     
-    # Calculate predicted direction and compare with actual
-    # Prediction: if prob > 0.5, expect price to go UP in 3 days
-    predictions = (probs > 0.5).astype(int)
-    
-    # Actual: did price go up in 3 days?
+    # Calculate accuracy
     returns_3d = close.pct_change(3).shift(-3)
-    actuals = (returns_3d > 0.01).astype(int)  # 1% threshold
-    
-    # Calculate accuracy on valid data
+    predictions = (probs > 0.5).astype(int)
+    actuals = (returns_3d > 0.01).astype(int)
     valid_mask = ~returns_3d.isna()
+    
     if valid_mask.sum() > 10:
-        matches = (predictions[valid_mask] == actuals[valid_mask])
-        accuracy = matches.mean() * 100
+        accuracy = (predictions[valid_mask] == actuals[valid_mask]).mean() * 100
     else:
         accuracy = None
     
-    # Last 30 days for chart
+    # Last 30 days
     last_n = 30
     chart_idx = features_df.index[-last_n:]
     chart_close = close.loc[chart_idx]
     chart_probs = probs[-last_n:]
     
-    # Create figure with 2 subplots
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
-                        vertical_spacing=0.1, row_heights=[0.6, 0.4],
-                        subplot_titles=("Actual Price", "ML Bullish Probability"))
+    # Create predicted price: actual price adjusted by prediction direction
+    # If prob > 0.5, predict price goes UP by expected amount
+    base_price = chart_close.iloc[0]
+    predicted_prices = []
     
-    # Actual price
+    for i, (idx, actual_price) in enumerate(chart_close.items()):
+        prob = chart_probs[i]
+        # Predict direction based on probability
+        if prob > 0.5:
+            # Bullish - predict price will be higher
+            predicted = actual_price * (1 + (prob - 0.5) * 0.1)
+        else:
+            # Bearish - predict price will be lower
+            predicted = actual_price * (1 - (0.5 - prob) * 0.1)
+        predicted_prices.append(predicted)
+    
+    # Create figure with single plot showing both lines
+    fig = go.Figure()
+    
+    # Actual price line
     fig.add_trace(go.Scatter(
         x=chart_idx, y=chart_close,
         name='Actual Price',
         line=dict(color='#00aaff', width=3),
         mode='lines'
-    ), row=1, col=1)
+    ))
     
-    # ML probability
+    # Predicted price line
     fig.add_trace(go.Scatter(
-        x=chart_idx, y=chart_probs,
-        name='ML Probability',
-        line=dict(color='#ffcc00', width=2),
-        fill='tozeroy',
-        fillcolor='rgba(255,204,0,0.1)'
-    ), row=2, col=1)
-    
-    # 50% threshold line
-    fig.add_hline(y=0.5, line=dict(color='#666', dash='dash', width=1), row=2, col=1)
+        x=chart_idx, y=predicted_prices,
+        name='Predicted Price',
+        line=dict(color='#ffcc00', width=2, dash='dash'),
+        mode='lines'
+    ))
     
     fig.update_layout(
         template='plotly_dark',
         paper_bgcolor='#0d0d0d',
         plot_bgcolor='#0d0d0d',
-        height=300,
+        height=220,
         margin=dict(l=0, r=0, t=30, b=0),
-        showlegend=False,
-        font=dict(family="JetBrains Mono", color="#888", size=10)
+        legend=dict(orientation="h", y=1.15, x=0.5, xanchor="center", font=dict(size=11, color="#fff")),
+        font=dict(family="JetBrains Mono", color="#888", size=10),
+        yaxis_title="Price ($)"
     )
     
     fig.update_xaxes(gridcolor='#222')
     fig.update_yaxes(gridcolor='#222')
-    fig.update_yaxes(range=[0, 1], row=2, col=1)
     
     return fig, accuracy
 
@@ -465,18 +492,19 @@ def render_action_panel(signal):
     stop_pct = ((stop - entry) / entry) * 100
     
     st.markdown(f'''
-    <div style="background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:12px;margin:8px 0;">
+    <div class="card">
+        <div class="card-title">Trade Levels</div>
         <div class="score-row">
             <span class="score-name">Entry</span>
-            <span class="metric-val">${entry:.2f}</span>
+            <span class="score-val">${entry:.2f}</span>
         </div>
         <div class="score-row">
             <span class="score-name">Target</span>
-            <span class="metric-val green">${target:.2f} (+{target_pct:.1f}%)</span>
+            <span class="score-val green">${target:.2f} (+{target_pct:.1f}%)</span>
         </div>
         <div class="score-row">
             <span class="score-name">Stop Loss</span>
-            <span class="metric-val red">${stop:.2f} ({stop_pct:.1f}%)</span>
+            <span class="score-val red">${stop:.2f} ({stop_pct:.1f}%)</span>
         </div>
     </div>
     ''', unsafe_allow_html=True)
@@ -491,114 +519,128 @@ def render_score_breakdown(signal):
         ("ML Model", signal.ml_score),
     ]
     
+    st.markdown('<div class="card"><div class="card-title">Score Breakdown</div>', unsafe_allow_html=True)
+    
     for name, score in scores:
-        if score >= 0.6:
-            color = "#00ff88"
-        elif score >= 0.4:
-            color = "#ffcc00"
-        else:
-            color = "#ff4444"
-        
+        color = "#00ff88" if score >= 0.6 else "#ffcc00" if score >= 0.4 else "#ff4444"
         st.markdown(f'''
         <div class="score-row">
             <span class="score-name">{name}</span>
             <span class="score-val" style="color:{color};">{score:.0%}</span>
         </div>
         ''', unsafe_allow_html=True)
-
-
-def render_api_quota():
-    """Display API quota status."""
-    quota = get_api_quota_info()
-    finnhub = quota['finnhub']
-    marketaux = quota['marketaux']
     
-    finn_remaining = finnhub['limit'] - finnhub['count']
-    mkt_remaining = marketaux['limit'] - marketaux['count']
-    finn_reset = finnhub['reset_time'].strftime('%H:%M')
-    mkt_reset = marketaux['reset_time'].strftime('%H:%M')
-    
-    st.markdown(f'''
-    <div class="quota-bar">
-        <span class="quota-name">Finnhub</span>
-        <span class="quota-val">{finn_remaining}/{finnhub['limit']} • Reset {finn_reset}</span>
-    </div>
-    <div class="quota-bar">
-        <span class="quota-name">Marketaux</span>
-        <span class="quota-val">{mkt_remaining}/{marketaux['limit']} • Reset {mkt_reset}</span>
-    </div>
-    ''', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 def render_sentiment_panel(ticker: str):
-    """Scrollable sentiment panel."""
+    """Sentiment panel with error handling."""
     try:
-        sent = sentiment_aggregator.aggregate_sentiment(ticker)
+        sent = sentiment_aggregator.get_sentiment(ticker)
         
-        news_items = sent.get('news_items', [])[:5]
+        overall = sent.get('overall_score', 0)
+        signal = sent.get('signal')
+        confidence = sent.get('confidence', 0)
+        sources = sent.get('sources_used', [])
         
-        st.markdown('<div class="scroll-panel">', unsafe_allow_html=True)
+        signal_text = "Bullish" if signal == True else "Bearish" if signal == False else "Neutral"
+        signal_color = "#00ff88" if signal == True else "#ff4444" if signal == False else "#ffcc00"
         
-        if news_items:
-            for item in news_items:
-                headline = item.get('headline', 'No headline')[:50]
-                sentiment_score = item.get('sentiment', 0)
-                color = "#00ff88" if sentiment_score > 0.2 else "#ff4444" if sentiment_score < -0.2 else "#ffcc00"
-                
-                st.markdown(f'''
-                <div class="panel-row">
-                    <span style="color:#888;">{headline}...</span>
-                    <span style="color:{color};">{sentiment_score:.2f}</span>
-                </div>
-                ''', unsafe_allow_html=True)
-        else:
-            overall = sent.get('overall_sentiment', 0)
-            label = sent.get('sentiment_label', 'Neutral')
-            st.markdown(f'''
+        st.markdown(f'''
+        <div class="scroll-panel">
             <div class="panel-row">
-                <span style="color:#888;">Overall Sentiment</span>
-                <span style="color:#fff;">{label} ({overall:.2f})</span>
+                <span class="panel-label">Overall Score</span>
+                <span class="panel-value" style="color:{signal_color};">{overall:.2f}</span>
             </div>
             <div class="panel-row">
-                <span style="color:#888;">News Count</span>
-                <span style="color:#fff;">{sent.get('news_count', 0)}</span>
+                <span class="panel-label">Signal</span>
+                <span class="panel-value" style="color:{signal_color};">{signal_text}</span>
             </div>
-            ''', unsafe_allow_html=True)
-        
-        st.markdown('</div>', unsafe_allow_html=True)
+            <div class="panel-row">
+                <span class="panel-label">Confidence</span>
+                <span class="panel-value">{confidence:.0%}</span>
+            </div>
+            <div class="panel-row">
+                <span class="panel-label">Sources</span>
+                <span class="panel-value">{", ".join(sources) or "N/A"}</span>
+            </div>
+        </div>
+        ''', unsafe_allow_html=True)
         
     except Exception as e:
-        st.markdown(f'<div style="color:#888;font-size:12px;">Unable to load sentiment: {str(e)[:50]}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="scroll-panel"><span style="color:#888;">Sentiment unavailable: {str(e)[:40]}</span></div>', unsafe_allow_html=True)
 
 
 def render_fundamental_panel(ticker: str):
-    """Scrollable fundamental panel."""
+    """Fundamental panel."""
     try:
         fund = fundamentals_fetcher.get_fundamentals(ticker)
         
-        st.markdown('<div class="scroll-panel">', unsafe_allow_html=True)
-        
         metrics = [
-            ("P/E Ratio", fund.get('pe_ratio', 'N/A')),
-            ("Industry P/E", fund.get('industry_pe', 'N/A')),
+            ("P/E Ratio", f"{fund.get('pe_ratio', 'N/A'):.2f}" if fund.get('pe_ratio') else "N/A"),
+            ("Market Cap", f"${fund.get('market_cap', 0)/1e9:.1f}B" if fund.get('market_cap') else "N/A"),
             ("EPS", f"${fund.get('eps_actual', 0):.2f}" if fund.get('eps_actual') else "N/A"),
             ("EPS Beat", "Yes ✓" if fund.get('eps_beat') else "No ✗"),
-            ("Market Cap", f"${fund.get('market_cap', 0)/1e9:.1f}B" if fund.get('market_cap') else "N/A"),
         ]
         
+        st.markdown('<div class="scroll-panel">', unsafe_allow_html=True)
         for name, value in metrics:
-            color = "#00ff88" if "Yes" in str(value) else "#ff4444" if "No" in str(value) else "#fff"
+            color = "#00ff88" if "Yes" in str(value) else "#ff4444" if "No ✗" in str(value) else "#fff"
             st.markdown(f'''
             <div class="panel-row">
-                <span style="color:#888;">{name}</span>
-                <span style="color:{color};">{value}</span>
+                <span class="panel-label">{name}</span>
+                <span class="panel-value" style="color:{color};">{value}</span>
             </div>
             ''', unsafe_allow_html=True)
-        
         st.markdown('</div>', unsafe_allow_html=True)
         
     except Exception as e:
-        st.markdown(f'<div style="color:#888;font-size:12px;">Unable to load fundamentals: {str(e)[:50]}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="scroll-panel"><span style="color:#888;">Fundamentals unavailable</span></div>', unsafe_allow_html=True)
+
+
+def render_paper_trading(ticker: str, current_price: float, signal):
+    """Paper trading panel."""
+    summary = paper_trader.get_summary()
+    return_color = "green" if summary['total_return'] >= 0 else "red"
+    
+    st.markdown(f'''
+    <div class="portfolio-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div>
+                <div style="font-size:11px;color:#999;text-transform:uppercase;">Portfolio Value</div>
+                <div class="portfolio-value">${summary['total_value']:,.2f}</div>
+            </div>
+            <div style="text-align:right;">
+                <div style="font-size:11px;color:#999;">Return</div>
+                <div class="portfolio-return {return_color}">{summary['total_return']:+.2f}%</div>
+            </div>
+        </div>
+        <div style="margin-top:10px;display:flex;gap:16px;font-size:11px;color:#888;">
+            <span>Cash: ${summary['cash']:,.2f}</span>
+            <span>Positions: {summary['positions']}</span>
+            <span>Win Rate: {summary['win_rate']:.0f}%</span>
+        </div>
+    </div>
+    ''', unsafe_allow_html=True)
+    
+    # Trade buttons
+    col1, col2 = st.columns(2)
+    with col1:
+        shares = st.number_input("Shares", min_value=1, max_value=100, value=10, key="shares")
+    with col2:
+        st.markdown(f"**Cost: ${shares * current_price:,.2f}**")
+    
+    btn_col1, btn_col2 = st.columns(2)
+    with btn_col1:
+        if st.button("🟢 BUY", use_container_width=True):
+            trade = paper_trader.buy(ticker, shares, current_price, signal.confidence)
+            if trade:
+                st.success(f"Bought {shares} {ticker} @ ${current_price:.2f}")
+    with btn_col2:
+        if st.button("🔴 SELL", use_container_width=True):
+            trade = paper_trader.sell(ticker, shares, current_price, signal.confidence)
+            if trade:
+                st.success(f"Sold {shares} {ticker} @ ${current_price:.2f}, PnL: ${trade.pnl:.2f}")
 
 
 # ============================================================================
@@ -625,10 +667,10 @@ def get_top_signals():
 
 
 def main():
-    # Search bar
-    search_col, _, _ = st.columns([2, 4, 2])
+    # Search bar - minimal
+    search_col, spacer = st.columns([1, 5])
     with search_col:
-        ticker_input = st.text_input("", value="AAPL", placeholder="Enter ticker...", label_visibility="collapsed")
+        ticker_input = st.text_input("", value="AAPL", placeholder="Ticker...", label_visibility="collapsed")
         if st.button("ANALYZE", use_container_width=True):
             st.session_state['current_ticker'] = ticker_input
     
@@ -641,105 +683,97 @@ def main():
         current_price = df['Close'].iloc[-1]
         prev_price = df['Close'].iloc[-2]
         price_change = ((current_price - prev_price) / prev_price) * 100
+        
+        # Update paper trader prices
+        paper_trader.update_prices({current_ticker: current_price})
     except Exception as e:
         st.error(f"Error: {e}")
         return
     
+    # CENTERED METRICS ROW
+    st.markdown(f'''
+    <div class="metrics-container">
+        <span class="ticker-display">{current_ticker}</span>
+        <div class="metric-box">
+            <div class="metric-val">${current_price:.2f}</div>
+            <div class="metric-lbl">Price</div>
+        </div>
+        <div class="metric-box">
+            <div class="metric-val {"green" if price_change > 0 else "red"}">{price_change:+.2f}%</div>
+            <div class="metric-lbl">Change</div>
+            <div class="metric-sub">vs Yesterday</div>
+        </div>
+        <div class="metric-box">
+            <div class="metric-val">{df["Volume"].iloc[-1]/1e6:.1f}M</div>
+            <div class="metric-lbl">Volume</div>
+        </div>
+    </div>
+    ''', unsafe_allow_html=True)
+    
     # LAYOUT
-    left_col, center_col, right_col = st.columns([1.2, 4, 1.5])
+    left_col, center_col, right_col = st.columns([1.2, 3.5, 1.8])
     
     # === LEFT ===
     with left_col:
         with st.spinner("Scanning..."):
             top_signals = get_top_signals()
         render_top_signals(top_signals)
-        
-        st.markdown("### ")
-        st.markdown("**API Quota**")
-        render_api_quota()
     
     # === CENTER ===
     with center_col:
-        # Metrics row
-        st.markdown(f'''
-        <div class="metrics-row">
-            <span class="ticker-name">{current_ticker}</span>
-            <div class="metric-card">
-                <div class="metric-val">${current_price:.2f}</div>
-                <div class="metric-lbl">Price</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-val {"green" if price_change > 0 else "red"}">{price_change:+.2f}%</div>
-                <div class="metric-lbl">Change</div>
-                <div class="metric-sub">vs Yesterday</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-val">{df["Volume"].iloc[-1]/1e6:.1f}M</div>
-                <div class="metric-lbl">Volume</div>
-            </div>
-        </div>
-        ''', unsafe_allow_html=True)
-        
         # Price chart
         fig = create_price_chart(df, current_ticker)
         st.plotly_chart(fig, use_container_width=True)
         
         # Prediction chart
-        st.markdown("**📈 Prediction vs Actual (Last 30 Days)**")
+        st.markdown("**📈 Actual vs Predicted Price (Last 30 Days)**")
         
         pred_col, acc_col = st.columns([5, 1])
-        
-        pred_fig, accuracy = create_prediction_comparison_chart(df)
+        pred_fig, accuracy = create_prediction_chart(df)
         
         with pred_col:
             if pred_fig:
                 st.plotly_chart(pred_fig, use_container_width=True)
             else:
-                st.info("ML model not available for predictions")
+                st.info("ML predictions unavailable")
         
         with acc_col:
             if accuracy is not None:
                 color = "green" if accuracy > 55 else "yellow" if accuracy > 45 else "red"
                 st.markdown(f'''
-                <div class="metric-card" style="margin-top:50px;">
+                <div class="metric-box" style="margin-top:30px;">
                     <div class="metric-val {color}">{accuracy:.1f}%</div>
                     <div class="metric-lbl">Accuracy</div>
-                    <div class="metric-sub">3-day</div>
                 </div>
                 ''', unsafe_allow_html=True)
-        
-        # Track button
-        track_col, _ = st.columns([1, 4])
-        with track_col:
-            if st.button("🔴 TRACK LIVE", use_container_width=True):
-                st.session_state['tracking'] = current_ticker
-                st.info(f"Now tracking {current_ticker} predictions vs actual")
     
     # === RIGHT ===
     with right_col:
         render_main_signal(signal)
         render_action_panel(signal)
-        
-        st.markdown("**Score Breakdown**")
         render_score_breakdown(signal)
         
-        # Expandable details
-        with st.expander("📰 Sentiment Details"):
+        # Expanders with fixed styling
+        with st.expander("📰 Sentiment Details", expanded=False):
             render_sentiment_panel(current_ticker)
         
-        with st.expander("📊 Fundamental Details"):
+        with st.expander("📊 Fundamentals", expanded=False):
             render_fundamental_panel(current_ticker)
         
-        with st.expander("🤖 ML Model Info"):
+        with st.expander("🤖 ML Model Info", expanded=False):
             st.markdown('''
-            <div class="scroll-panel" style="color:#fff;">
-                <p><b>Model:</b> XGBoost Classifier</p>
-                <p><b>Prediction:</b> 3-day price movement >1%</p>
-                <p><b>Training:</b> ~450 samples/ticker (2 years)</p>
-                <p><b>Features:</b> 17 (RSI, MACD, BB, ATR, etc.)</p>
-                <p><b>Validation Accuracy:</b> ~70%</p>
+            <div class="scroll-panel">
+                <div class="panel-row"><span class="panel-label">Model</span><span class="panel-value">XGBoost</span></div>
+                <div class="panel-row"><span class="panel-label">Window</span><span class="panel-value">3 days</span></div>
+                <div class="panel-row"><span class="panel-label">Features</span><span class="panel-value">17</span></div>
+                <div class="panel-row"><span class="panel-label">Accuracy</span><span class="panel-value">~70%</span></div>
             </div>
             ''', unsafe_allow_html=True)
+        
+        # Paper Trading
+        st.markdown("---")
+        with st.expander("💰 Paper Trading", expanded=True):
+            render_paper_trading(current_ticker, current_price, signal)
 
 
 if __name__ == "__main__":
