@@ -10,8 +10,10 @@ import numpy as np
 
 from src.utils.logger import get_logger
 from src.sentiment.finbert import get_finbert_analyzer
+from src.sentiment.finbert_analyzer import finbert_sentiment_analyzer
 from src.sentiment.news_fetcher import news_fetcher
 from src.sentiment.reddit import reddit_sentiment
+from src.sentiment.social_fetcher import social_fetcher
 from src.data.cache import cache
 
 logger = get_logger(__name__)
@@ -20,9 +22,9 @@ logger = get_logger(__name__)
 @dataclass
 class SentimentWeights:
     """Weights for different sentiment sources."""
-    news: float = 0.4
-    reddit: float = 0.3
-    finbert: float = 0.3
+    news: float = 0.35
+    social: float = 0.35
+    finbert: float = 0.30
 
 
 class SentimentAggregator:
@@ -59,7 +61,7 @@ class SentimentAggregator:
         self,
         ticker: str,
         include_news: bool = True,
-        include_reddit: bool = True,
+        include_social: bool = True,
         include_finbert: bool = True,
         use_cache: bool = True
     ) -> Dict[str, Any]:
@@ -69,7 +71,7 @@ class SentimentAggregator:
         Args:
             ticker: Stock symbol
             include_news: Include news sentiment
-            include_reddit: Include Reddit sentiment
+            include_social: Include social media sentiment (Reddit, Twitter, etc.)
             include_finbert: Run FinBERT on news titles
             use_cache: Use cached results
             
@@ -78,7 +80,7 @@ class SentimentAggregator:
                 - overall_score: Combined score (-1 to +1)
                 - signal: True (bullish), False (bearish), None (neutral)
                 - news_sentiment: News-specific sentiment
-                - reddit_sentiment: Reddit-specific sentiment
+                - social_sentiment: Social media sentiment
                 - finbert_sentiment: FinBERT analysis results
                 - confidence: Confidence in the signal
         """
@@ -96,7 +98,7 @@ class SentimentAggregator:
             "signal": None,
             "confidence": 0.0,
             "news_sentiment": None,
-            "reddit_sentiment": None,
+            "social_sentiment": None,
             "finbert_sentiment": None,
             "sources_used": [],
         }
@@ -113,14 +115,14 @@ class SentimentAggregator:
                 weights.append(self.weights.news)
                 result["sources_used"].append("news")
         
-        # Reddit sentiment
-        if include_reddit:
-            reddit_data = reddit_sentiment.get_reddit_sentiment_signal(ticker)
-            result["reddit_sentiment"] = reddit_data
-            if reddit_data.get("sentiment_score") is not None:
-                scores.append(reddit_data["sentiment_score"])
-                weights.append(self.weights.reddit)
-                result["sources_used"].append("reddit")
+        # Social Media sentiment (Reddit, Twitter, StockTwits)
+        if include_social:
+            social_data = social_fetcher.get_social_sentiment(ticker)
+            result["social_sentiment"] = social_data
+            if social_data.get("overall_score") is not None:
+                scores.append(social_data["overall_score"])
+                weights.append(self.weights.social)
+                result["sources_used"].append("social")
         
         # Calculate overall score
         if scores:

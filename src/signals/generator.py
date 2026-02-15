@@ -20,8 +20,11 @@ from src.analysis import (
     adaptive_thresholds
 )
 from src.analysis.adaptive import AdaptiveThresholds
+from src.analysis.fundamental import fundamental_analyzer
+from src.analysis.options import options_analyzer
 from src.data.fetcher_fundamentals import fundamentals_fetcher
 from src.data.fetcher_options import options_fetcher
+from src.signals.tp_sl_calculator import tp_sl_calculator
 from src.sentiment import sentiment_aggregator
 from src.ml import FeatureEngineer, signal_model, ensemble_model
 from src.config import config
@@ -223,14 +226,14 @@ class SignalGenerator:
         fundamental_details = {}
         if include_fundamentals and not is_crypto:
             try:
-                fund_signals = fundamentals_fetcher.get_fundamental_signals(ticker)
-                fundamental_score = fund_signals.get("fundamental_score")
-                fundamental_details = fund_signals.get("details", {})
+                fund_result = fundamental_analyzer.analyze(ticker)
+                fundamental_score = fund_result.get("fundamental_score")
+                fundamental_details = fund_result
                 
-                if fund_signals.get("pe_signal"):
-                    reasons.append("Fundamental: P/E below sector average")
-                if fund_signals.get("eps_beat_signal"):
-                    reasons.append("Fundamental: Recent EPS beat")
+                # Add key reasons from comprehensive analysis
+                fund_reasons = fund_result.get("reasons", [])
+                for reason in fund_reasons[:2]:  # Top 2 reasons
+                    reasons.append(f"Fundamental: {reason}")
             except Exception as e:
                 logger.warning(f"Fundamental analysis failed for {ticker}: {e}")
         
@@ -258,24 +261,13 @@ class SignalGenerator:
         options_score = None
         if include_options and not is_crypto:
             try:
-                pc_result = options_fetcher.get_put_call_ratio(ticker)
-                ratio = pc_result.get("ratio")
-                if ratio is not None:
-                    if ratio <= 0.5:
-                        options_score = 0.8
-                    elif ratio <= 0.7:
-                        options_score = 0.65
-                    elif ratio <= 1.0:
-                        options_score = 0.5
-                    elif ratio <= 1.3:
-                        options_score = 0.35
-                    else:
-                        options_score = 0.2
-
-                    if pc_result.get("signal") is True:
-                        reasons.append(f"Options: Bullish P/C ratio ({ratio:.2f})")
-                    elif ratio > 1.0:
-                        reasons.append(f"Options: Bearish P/C ratio ({ratio:.2f})")
+                opt_result = options_analyzer.analyze(ticker, include_unusual=True)
+                options_score = opt_result.get("options_score")
+                
+                # Add key options insights
+                opt_reasons = opt_result.get("reasons", [])
+                for reason in opt_reasons[:2]:  # Top 2 reasons
+                    reasons.append(f"Options: {reason}")
             except Exception as e:
                 logger.warning(f"Options analysis failed for {ticker}: {e}")
         
@@ -332,9 +324,18 @@ class SignalGenerator:
         # Calculate targets with adaptive multiplier
         sl_multiplier = adaptive_thresholds.get_stop_loss_multiplier(regime)
         
-        take_profit, stop_loss = self._calculate_targets(
-            current_price, signal_type, sr_result, df, sl_multiplier
-        )
+        # Use dedicated TP/SL calculator
+        direction = "long" if signal_type == SignalType.BUY else "short" if signal_type == SignalType.SELL else None
+        if direction:
+            take_profit, stop_loss = tp_sl_calculator.calculate(
+                entry_price=current_price,
+                direction=direction,
+                df=df,
+                sr_levels=sr_result,
+                sl_multiplier=sl_multiplier
+            )
+        else:
+            take_profit, stop_loss = None, None
         
         return TradingSignal(
             ticker=ticker,

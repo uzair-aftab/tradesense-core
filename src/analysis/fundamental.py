@@ -5,7 +5,7 @@ Provides fundamental scoring and signal generation for stocks.
 Analyzes P/E ratios, earnings, revenue growth, and financial health metrics.
 """
 
-from typing import Dict, Optional, Any
+from typing import Dict, List, Optional, Any
 import numpy as np
 
 from src.data.fetcher_fundamentals import fundamentals_fetcher
