@@ -47,6 +47,10 @@ class Config:
     CACHE_DB_PATH: str = os.getenv("CACHE_DB_PATH", str(DATA_DIR / "cache.db"))
     CACHE_TTL_SECONDS: int = int(os.getenv("CACHE_TTL_SECONDS", "3600"))
     NEWS_CACHE_TTL: int = int(os.getenv("NEWS_CACHE_TTL", "1800"))  # 30 minutes
+    HISTORICAL_CACHE_TTL: int = int(os.getenv("HISTORICAL_CACHE_TTL", "3600"))
+    QUOTE_CACHE_TTL: int = int(os.getenv("QUOTE_CACHE_TTL", "120"))
+    OPTIONS_CACHE_TTL: int = int(os.getenv("OPTIONS_CACHE_TTL", "900"))
+    FUNDAMENTALS_CACHE_TTL: int = int(os.getenv("FUNDAMENTALS_CACHE_TTL", "21600"))
     
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")

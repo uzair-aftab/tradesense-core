@@ -10,6 +10,8 @@ import pandas as pd
 import yfinance as yf
 
 from src.utils.logger import get_logger
+from src.data.cache import cache
+from src.config import config
 
 logger = get_logger(__name__)
 
@@ -47,7 +49,8 @@ class OptionsFetcher:
     def get_options_chain(
         self,
         ticker: str,
-        expiration: Optional[str] = None
+        expiration: Optional[str] = None,
+        use_cache: bool = True
     ) -> Dict[str, pd.DataFrame]:
         """
         Get options chain data for a ticker.
@@ -60,29 +63,37 @@ class OptionsFetcher:
             Dict with 'calls' and 'puts' DataFrames
         """
         try:
+            cache_key = f"options:chain:{ticker}:{expiration or 'nearest'}"
+            if use_cache:
+                cached = cache.get(cache_key)
+                if isinstance(cached, dict) and cached.get("calls") is not None:
+                    return cached
+
             stock = yf.Ticker(ticker)
-            
+
             # Get available expirations
             expirations = stock.options
             if not expirations:
                 logger.warning(f"No options available for {ticker}")
                 return {"calls": pd.DataFrame(), "puts": pd.DataFrame()}
-            
+
             # Use specified or nearest expiration
             if expiration is None or expiration not in expirations:
                 expiration = expirations[0]  # Nearest expiration
-            
+
             # Get the options chain
             chain = stock.option_chain(expiration)
-            
-            logger.info(f"Fetched options chain for {ticker} exp={expiration}")
-            
-            return {
+
+            result = {
                 "calls": chain.calls,
                 "puts": chain.puts,
                 "expiration": expiration,
             }
-            
+
+            cache.set(cache_key, result, ttl=config.OPTIONS_CACHE_TTL)
+            logger.info(f"Fetched options chain for {ticker} exp={expiration}")
+            return result
+
         except Exception as e:
             logger.error(f"Error fetching options chain for {ticker}: {e}")
             return {"calls": pd.DataFrame(), "puts": pd.DataFrame(), "error": str(e)}
@@ -91,7 +102,8 @@ class OptionsFetcher:
         self,
         ticker: str,
         expiration: Optional[str] = None,
-        method: str = "volume"
+        method: str = "volume",
+        use_cache: bool = True
     ) -> Dict[str, Any]:
         """
         Calculate put/call ratio for a ticker.
@@ -109,7 +121,13 @@ class OptionsFetcher:
                 - call_volume: Total call volume
         """
         try:
-            chain = self.get_options_chain(ticker, expiration)
+            cache_key = f"options:pc:{ticker}:{expiration or 'nearest'}:{method}"
+            if use_cache:
+                cached = cache.get(cache_key)
+                if isinstance(cached, dict) and cached.get("ratio") is not None:
+                    return cached
+
+            chain = self.get_options_chain(ticker, expiration, use_cache=use_cache)
             
             if chain["calls"].empty or chain["puts"].empty:
                 return {
@@ -147,10 +165,11 @@ class OptionsFetcher:
                 "put_total": put_total,
                 "call_total": call_total,
                 "signal": ratio < 0.7 if ratio is not None else None,  # Bullish if < 0.7
-                "sentiment": self._interpret_ratio(ratio) if ratio else None,
+                "sentiment": self._interpret_ratio(ratio) if ratio is not None else None,
             }
             
-            logger.info(f"Put/Call ratio for {ticker}: {ratio:.2f}" if ratio else f"No P/C ratio for {ticker}")
+            logger.info(f"Put/Call ratio for {ticker}: {ratio:.2f}" if ratio is not None else f"No P/C ratio for {ticker}")
+            cache.set(cache_key, result, ttl=config.OPTIONS_CACHE_TTL)
             return result
             
         except Exception as e:

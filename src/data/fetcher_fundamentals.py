@@ -11,6 +11,8 @@ import pandas as pd
 import yfinance as yf
 
 from src.utils.logger import get_logger
+from src.data.cache import cache
+from src.config import config
 
 logger = get_logger(__name__)
 
@@ -51,6 +53,11 @@ class FundamentalsFetcher:
                 - industry: Company industry
         """
         try:
+            cache_key = f"fundamentals:core:{ticker}"
+            cached = cache.get(cache_key)
+            if isinstance(cached, dict) and cached.get("ticker") == ticker:
+                return cached
+
             stock = yf.Ticker(ticker)
             info = stock.info
             
@@ -110,6 +117,7 @@ class FundamentalsFetcher:
             }
             
             logger.info(f"Fetched fundamentals for {ticker}")
+            cache.set(cache_key, fundamentals, ttl=config.FUNDAMENTALS_CACHE_TTL)
             return fundamentals
             
         except Exception as e:
@@ -132,6 +140,11 @@ class FundamentalsFetcher:
                 - eps_beat: True if beat estimate
         """
         try:
+            cache_key = f"fundamentals:earnings:{ticker}"
+            cached = cache.get(cache_key)
+            if isinstance(cached, dict) and cached.get("ticker") == ticker:
+                return cached
+
             stock = yf.Ticker(ticker)
             
             # Get earnings history
@@ -168,6 +181,7 @@ class FundamentalsFetcher:
                 result["next_earnings_date"] = None
             
             logger.info(f"Fetched earnings for {ticker}")
+            cache.set(cache_key, result, ttl=config.FUNDAMENTALS_CACHE_TTL)
             return result
             
         except Exception as e:
@@ -185,6 +199,11 @@ class FundamentalsFetcher:
             Dict with revenue data
         """
         try:
+            cache_key = f"fundamentals:revenue:{ticker}"
+            cached = cache.get(cache_key)
+            if isinstance(cached, dict) and cached.get("ticker") == ticker:
+                return cached
+
             stock = yf.Ticker(ticker)
             info = stock.info
             
@@ -204,6 +223,7 @@ class FundamentalsFetcher:
                     result["quarterly_revenue"] = quarterly.loc["Total Revenue"].to_dict()
             
             logger.info(f"Fetched revenue for {ticker}")
+            cache.set(cache_key, result, ttl=config.FUNDAMENTALS_CACHE_TTL)
             return result
             
         except Exception as e:
@@ -225,6 +245,11 @@ class FundamentalsFetcher:
                 - pe_below_industry: True if P/E is below industry avg
         """
         try:
+            cache_key = f"fundamentals:pe_vs_industry:{ticker}"
+            cached = cache.get(cache_key)
+            if isinstance(cached, dict) and cached.get("ticker") == ticker:
+                return cached
+
             stock = yf.Ticker(ticker)
             info = stock.info
             
@@ -262,6 +287,7 @@ class FundamentalsFetcher:
             }
             
             logger.info(f"Fetched P/E comparison for {ticker}")
+            cache.set(cache_key, result, ttl=config.FUNDAMENTALS_CACHE_TTL)
             return result
             
         except Exception as e:
