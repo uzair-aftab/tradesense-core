@@ -6,7 +6,7 @@ Supports CAD pairs for Canadian users.
 """
 
 from typing import Dict, List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 import yfinance as yf
 
@@ -72,7 +72,7 @@ class CryptoFetcher:
         if start and end:
             return {"start": start, "end": end}
 
-        now = datetime.utcnow().date()
+        now = datetime.now(timezone.utc).date()
         period_map = {
             "1d": 1,
             "5d": 5,

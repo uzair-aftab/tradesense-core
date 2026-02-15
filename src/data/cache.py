@@ -351,6 +351,14 @@ class DataCache:
                 df["date"] = pd.to_datetime(df["date"])
                 df.set_index("date", inplace=True)
                 df.drop(columns=["ticker", "updated_at"], inplace=True, errors="ignore")
+                df = df.rename(columns={
+                    "open": "Open",
+                    "high": "High",
+                    "low": "Low",
+                    "close": "Close",
+                    "volume": "Volume",
+                    "adj_close": "Adj Close",
+                })
             
             return df
             

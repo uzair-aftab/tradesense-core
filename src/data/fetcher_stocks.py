@@ -6,7 +6,7 @@ Supports historical OHLCV data and real-time quotes.
 """
 
 from typing import Dict, List, Optional, Union
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 import yfinance as yf
 
@@ -53,7 +53,7 @@ class StockFetcher:
         if start and end:
             return {"start": start, "end": end}
 
-        now = datetime.utcnow().date()
+        now = datetime.now(timezone.utc).date()
         period_map = {
             "1d": 1,
             "5d": 5,

@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 import os
 import numpy as np
+import pandas_ta as ta
 
 from src.utils.logger import get_logger
 from src.data import stock_fetcher, crypto_fetcher, watchlist
@@ -117,6 +118,43 @@ class SignalGenerator:
         """
         self.weights = weights or SignalWeights()
         self.min_confidence = min_confidence
+
+    def _combine_scores(self, scores: Dict[str, Optional[float]]) -> Tuple[float, Dict[str, float]]:
+        weight_map = {
+            "technical": self.weights.technical,
+            "fundamental": self.weights.fundamental,
+            "sentiment": self.weights.sentiment,
+            "options": self.weights.options,
+            "ml": self.weights.ml,
+        }
+
+        active = {k: v for k, v in scores.items() if v is not None}
+        if not active:
+            return 0.5, {}
+
+        total_weight = sum(weight_map[k] for k in active.keys())
+        if total_weight <= 0:
+            return 0.5, {}
+
+        normalized = {k: weight_map[k] / total_weight for k in active.keys()}
+        composite = sum(active[k] * normalized[k] for k in active.keys())
+        return composite, normalized
+
+    def _calculate_confidence(
+        self,
+        composite_score: float,
+        signal_type: SignalType,
+        active_sources: int
+    ) -> float:
+        decision_strength = min(1.0, abs(composite_score - 0.5) * 2)
+        coverage = min(1.0, active_sources / 5.0)
+
+        if signal_type == SignalType.HOLD:
+            base = 1 - decision_strength
+        else:
+            base = decision_strength
+
+        return max(0.0, min(1.0, base * (0.6 + 0.4 * coverage)))
     
     def generate_signal(
         self,
@@ -154,8 +192,8 @@ class SignalGenerator:
         
         # Adaptive Thresholds - Detect Regime
         regime_info = adaptive_thresholds.detect_regime(df)
-        regime = regime_info["regime"]
-        volatility = regime_info["volatility"]
+        regime = regime_info.get("regime", "UNKNOWN")
+        volatility = regime_info.get("volatility", "NORMAL")
         logger.info(f"Market Regime for {ticker}: {regime} (Vol: {volatility}, ATR={regime_info.get('atr_percent', 'N/A')}%)")
         
         # Get dynamic thresholds
@@ -167,7 +205,7 @@ class SignalGenerator:
         
         # Technical Analysis with adaptive thresholds
         tech_result = technical_signal_generator.analyze(df, thresholds=thresholds_overrides)
-        technical_score = tech_result.get("technical_score", 0.5)
+        technical_score = tech_result.get("technical_score")
         
         if tech_result.get("composite_signal") is True:
             reasons.append(f"Technical: {tech_result.get('buy_signals', 0)}/3 buy signals")
@@ -181,12 +219,12 @@ class SignalGenerator:
         sr_result = support_resistance.find_levels(df)
         
         # Fundamental Analysis
-        fundamental_score = 0.5
+        fundamental_score = None
         fundamental_details = {}
         if include_fundamentals and not is_crypto:
             try:
                 fund_signals = fundamentals_fetcher.get_fundamental_signals(ticker)
-                fundamental_score = fund_signals.get("fundamental_score", 0.5)
+                fundamental_score = fund_signals.get("fundamental_score")
                 fundamental_details = fund_signals.get("details", {})
                 
                 if fund_signals.get("pe_signal"):
@@ -197,7 +235,7 @@ class SignalGenerator:
                 logger.warning(f"Fundamental analysis failed for {ticker}: {e}")
         
         # Sentiment Analysis
-        sentiment_score = 0.5
+        sentiment_score = None
         sentiment_details = {}
         if include_sentiment:
             try:
@@ -217,28 +255,40 @@ class SignalGenerator:
                 logger.warning(f"Sentiment analysis failed for {ticker}: {e}")
         
         # Options Analysis
-        options_score = 0.5
+        options_score = None
         if include_options and not is_crypto:
             try:
                 pc_result = options_fetcher.get_put_call_ratio(ticker)
-                if pc_result.get("signal") is True:
-                    options_score = 0.7
-                    reasons.append(f"Options: Bullish P/C ratio ({pc_result.get('ratio', 0):.2f})")
-                elif pc_result.get("ratio") and pc_result.get("ratio") > 1.0:
-                    options_score = 0.3
-                    reasons.append(f"Options: Bearish P/C ratio ({pc_result.get('ratio', 0):.2f})")
+                ratio = pc_result.get("ratio")
+                if ratio is not None:
+                    if ratio <= 0.5:
+                        options_score = 0.8
+                    elif ratio <= 0.7:
+                        options_score = 0.65
+                    elif ratio <= 1.0:
+                        options_score = 0.5
+                    elif ratio <= 1.3:
+                        options_score = 0.35
+                    else:
+                        options_score = 0.2
+
+                    if pc_result.get("signal") is True:
+                        reasons.append(f"Options: Bullish P/C ratio ({ratio:.2f})")
+                    elif ratio > 1.0:
+                        reasons.append(f"Options: Bearish P/C ratio ({ratio:.2f})")
             except Exception as e:
                 logger.warning(f"Options analysis failed for {ticker}: {e}")
         
         # ML Model Prediction (using Ensemble: XGB + LSTM + Transformer)
-        ml_score = 0.5  # Neutral default
+        ml_score = None
         try:
             # Use ensemble for combined prediction
             ensemble_result = ensemble_model.predict(df)
-            ml_score = ensemble_result.get('probability', 0.5)
+            ml_score = ensemble_result.get("probability")
             components = ensemble_result.get('components', {})
             active_models = [k for k, v in components.items() if v is not None]
-            reasons.append(f"ML Ensemble ({', '.join(active_models)}): {ml_score:.0%} bullish")
+            if ml_score is not None and active_models:
+                reasons.append(f"ML Ensemble ({', '.join(active_models)}): {ml_score:.0%} bullish")
         except Exception as e:
             logger.warning(f"ML prediction failed for {ticker}: {e}")
             # Fallback to XGBoost only
@@ -253,14 +303,15 @@ class SignalGenerator:
             except Exception as e2:
                 logger.warning(f"XGB fallback also failed: {e2}")
         
-        # Calculate weighted composite score
-        composite_score = (
-            technical_score * self.weights.technical +
-            fundamental_score * self.weights.fundamental +
-            sentiment_score * self.weights.sentiment +
-            options_score * self.weights.options +
-            ml_score * self.weights.ml
-        )
+        scores = {
+            "technical": technical_score,
+            "fundamental": fundamental_score,
+            "sentiment": sentiment_score,
+            "options": options_score,
+            "ml": ml_score,
+        }
+
+        composite_score, normalized_weights = self._combine_scores(scores)
         
         # Determine signal type
         if composite_score >= 0.6:
@@ -270,17 +321,13 @@ class SignalGenerator:
         else:
             signal_type = SignalType.HOLD
         
-        # Calculate confidence - direct and meaningful
-        # Confidence = how far from neutral (0.5) the composite is, scaled to 0-1
-        if signal_type == SignalType.BUY:
-            # BUY: composite 0.6 → 60% confidence, 0.8 → 80%
-            confidence = composite_score
-        elif signal_type == SignalType.SELL:
-            # SELL: composite 0.3 → 70% confidence (1 - 0.3)
-            confidence = 1 - composite_score
-        else:
-            # HOLD: confidence in the hold decision (how close to 0.5)
-            confidence = 1 - abs(composite_score - 0.5) * 2
+        active_sources = len([v for v in scores.values() if v is not None])
+        confidence = self._calculate_confidence(composite_score, signal_type, active_sources)
+
+        if signal_type != SignalType.HOLD and confidence < self.min_confidence:
+            signal_type = SignalType.HOLD
+            reasons.append("Confidence below threshold")
+            confidence = self._calculate_confidence(composite_score, signal_type, active_sources)
         
         # Calculate targets with adaptive multiplier
         sl_multiplier = adaptive_thresholds.get_stop_loss_multiplier(regime)
@@ -324,8 +371,10 @@ class SignalGenerator:
             return None, None
         
         # Calculate ATR for volatility-based stops
-        high_low = df["High"] - df["Low"]
-        atr = high_low.rolling(window=14).mean().iloc[-1]
+        atr_series = ta.atr(df["High"], df["Low"], df["Close"], length=14)
+        atr = atr_series.iloc[-1] if atr_series is not None and not atr_series.empty else None
+        if atr is None or np.isnan(atr):
+            atr = (df["High"] - df["Low"]).rolling(window=14).mean().iloc[-1]
         
         if signal_type == SignalType.BUY:
             # Take profit at resistance or 2x ATR

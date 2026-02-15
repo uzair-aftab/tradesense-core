@@ -395,7 +395,7 @@ class VolumeAnalyzer:
         else:
             price_up = None
         
-        high_volume = current_ratio >= (1 + self.threshold)
+        high_volume = current_ratio >= self.threshold
         
         return {
             "high_volume": high_volume,
