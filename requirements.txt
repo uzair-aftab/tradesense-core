@@ -1,44 +1,59 @@
-# ============================================
-# TradeSense - Trading Signal Scanner
-# Python 3.12 | CUDA 12.4 | Windows 11
-# ============================================
+# ================================================================
+# HFP – High-Frequency Prediction & Paper Trading System
+# Python 3.10+ | CUDA 11.8 | Windows 11 | RTX 4070
+# ================================================================
+#
+# STEP 0 — Install PyTorch *first* with CUDA 11.8:
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+#
+# Then install everything else:
+#   pip install -r requirements.txt
+# ================================================================
 
-# Data Sources
+# ----- Data Sources -----
 yfinance>=0.2.36
 finnhub-python>=2.4.19
 
-# Technical Analysis
+# ----- Technical Analysis -----
 pandas-ta>=0.3.14b0
 
-# Backtesting
+# ----- Backtesting / Metrics -----
 vectorbt>=0.26.0
 kaleido>=0.2.1
 anywidget>=0.9.0
 
-# Sentiment Analysis (NLP)
-transformers>=4.40.0
+# ----- Sentiment Analysis (NLP) -----
+transformers>=4.40.0          # FinBERT (ProsusAI/finbert)
 sentence-transformers>=2.5.0
+vaderSentiment>=3.3.2         # VADER fallback sentiment
+
+# ----- Social / News APIs -----
 praw>=7.7.1
 requests>=2.31.0
 
-# ML/AI
+# ----- ML / AI -----
 scikit-learn>=1.4.0
 xgboost>=2.0.0
 
-# Database
+# ----- Data Processing -----
+polars>=0.20.0                # Fast DataFrame alternative
+
+# ----- Async I/O -----
+aiohttp>=3.9.0
+aiofiles>=23.2.1
+
+# ----- Database / Caching -----
 sqlalchemy>=2.0.0
 
-# UI
+# ----- UI -----
 streamlit>=1.31.0
 plotly>=5.18.0
 
-# Scheduling
+# ----- Scheduling -----
 apscheduler>=3.10.4
 
-# Core
+# ----- Core -----
 pandas>=2.2.0
 numpy>=1.26.0
 python-dotenv>=1.0.0
-
-# Note: PyTorch installed separately with CUDA support
-# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+tqdm>=4.66.0

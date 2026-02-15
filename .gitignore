@@ -70,6 +70,7 @@ htmlcov/
 .env
 .env.local
 .env.*.local
+!.env.example
 *.pem
 *.key
 secrets/
@@ -93,10 +94,11 @@ logs/
 # -----------------
 # ML Models (large files)
 # -----------------
-models/*.pt
-models/*.pth
-models/*.pkl
-models/*.joblib
+models/
+*.pt
+*.pth
+*.pkl
+*.joblib
 *.onnx
 
 # -----------------
