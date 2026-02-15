@@ -657,12 +657,22 @@ def render_score_breakdown(signal):
         ("Technical", signal.technical_score),
         ("Fundamental", signal.fundamental_score),
         ("Sentiment", signal.sentiment_score),
+        ("Options", signal.options_score),
         ("ML Model", signal.ml_score),
     ]
     
     st.markdown('<div class="card"><div class="card-title">Score Breakdown</div>', unsafe_allow_html=True)
     
     for name, score in scores:
+        if score is None:
+            st.markdown(f'''
+            <div class="score-row">
+                <span class="score-name">{name}</span>
+                <span class="score-val" style="color:#888;">N/A</span>
+            </div>
+            ''', unsafe_allow_html=True)
+            continue
+
         color = "#00ff88" if score >= 0.6 else "#ffcc00" if score >= 0.4 else "#ff4444"
         st.markdown(f'''
         <div class="score-row">
@@ -672,6 +682,97 @@ def render_score_breakdown(signal):
         ''', unsafe_allow_html=True)
     
     st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_trade_thesis(signal):
+    """Narrative explanation for why this trade exists."""
+    components = [
+        ("Technical", signal.technical_score),
+        ("Fundamental", signal.fundamental_score),
+        ("Sentiment", signal.sentiment_score),
+        ("Options", signal.options_score),
+        ("ML", signal.ml_score),
+    ]
+
+    active_components = [(name, score) for name, score in components if score is not None]
+    active_scores = [score for _, score in active_components]
+    coverage = len(active_components) / 5 if active_components else 0.0
+    composite_score = float(np.mean(active_scores)) if active_scores else 0.5
+    decision_strength = abs(composite_score - 0.5) * 2
+
+    regime_text = "Unknown"
+    for reason in signal.reasons:
+        if reason.startswith("Regime:"):
+            regime_text = reason.replace("Regime:", "").strip()
+            break
+
+    top_drivers = sorted(
+        active_components,
+        key=lambda item: abs(item[1] - 0.5),
+        reverse=True
+    )[:3]
+    driver_text = ", ".join([f"{name} {score:.0%}" for name, score in top_drivers]) if top_drivers else "No active drivers"
+
+    entry = signal.entry_price
+    target = signal.take_profit
+    stop = signal.stop_loss
+    rr_text = "N/A"
+    if target is not None and stop is not None and entry is not None:
+        risk = abs(entry - stop)
+        reward = abs(target - entry)
+        if risk > 0:
+            rr_text = f"1:{reward / risk:.2f}"
+
+    thesis_line = "Bias is neutral due to mixed factor alignment"
+    if signal.signal_type.value == "BUY":
+        thesis_line = "Bullish bias: upside factors outweigh downside risk"
+    elif signal.signal_type.value == "SELL":
+        thesis_line = "Bearish bias: downside pressure dominates current setup"
+
+    st.markdown(f'''
+    <div class="card">
+        <div class="card-title">Why This Trade</div>
+        <div class="score-row"><span class="score-name">Thesis</span><span class="score-val">{thesis_line}</span></div>
+        <div class="score-row"><span class="score-name">Regime</span><span class="score-val">{regime_text}</span></div>
+        <div class="score-row"><span class="score-name">Composite</span><span class="score-val">{composite_score:.0%}</span></div>
+        <div class="score-row"><span class="score-name">Decision Strength</span><span class="score-val">{decision_strength:.0%}</span></div>
+        <div class="score-row"><span class="score-name">Coverage</span><span class="score-val">{coverage:.0%} ({len(active_components)}/5)</span></div>
+        <div class="score-row"><span class="score-name">Risk:Reward</span><span class="score-val">{rr_text}</span></div>
+        <div class="score-row"><span class="score-name">Top Drivers</span><span class="score-val">{driver_text}</span></div>
+    </div>
+    ''', unsafe_allow_html=True)
+
+    if signal.reasons:
+        st.caption("Key factors: " + " • ".join(signal.reasons[:4]))
+
+
+def _weighted_signal_score(signal):
+    """Compute weighted score while handling missing component values."""
+    component_weights = {
+        "technical": 0.30,
+        "fundamental": 0.20,
+        "sentiment": 0.20,
+        "options": 0.10,
+        "ml": 0.20,
+    }
+    component_values = {
+        "technical": signal.technical_score,
+        "fundamental": signal.fundamental_score,
+        "sentiment": signal.sentiment_score,
+        "options": signal.options_score,
+        "ml": signal.ml_score,
+    }
+
+    active_items = [
+        (name, value)
+        for name, value in component_values.items()
+        if value is not None
+    ]
+    if not active_items:
+        return 0.5
+
+    total_weight = sum(component_weights[name] for name, _ in active_items)
+    return sum(value * (component_weights[name] / total_weight) for name, value in active_items)
 
 
 def render_sentiment_panel(ticker: str):
@@ -814,9 +915,7 @@ def get_top_signals():
     for ticker in tickers:
         try:
             signal = signal_generator.generate_signal(ticker)
-            score = (signal.technical_score * 0.3 + signal.fundamental_score * 0.2 +
-                     signal.sentiment_score * 0.2 + signal.options_score * 0.1 + 
-                     signal.ml_score * 0.2)
+            score = _weighted_signal_score(signal)
             results.append((ticker, score, signal.signal_type.value))
         except:
             pass
@@ -995,6 +1094,7 @@ def main():
     with right_col:
         try:
             render_main_signal(signal)
+            render_trade_thesis(signal)
             render_action_panel(signal)
             render_score_breakdown(signal)
             

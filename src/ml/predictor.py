@@ -121,6 +121,28 @@ class UnifiedPredictor:
     def __init__(self):
         """Initialize unified predictor with lazy-loaded models."""
         self._models = {}
+
+    def _normalize_price_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Normalize OHLCV column names to Title case expected by feature engineering."""
+        if df.empty:
+            return df
+
+        rename_map = {
+            "open": "Open",
+            "high": "High",
+            "low": "Low",
+            "close": "Close",
+            "volume": "Volume",
+            "adj close": "Adj Close",
+            "adj_close": "Adj Close",
+        }
+
+        normalized = df.copy()
+        normalized.columns = [str(col) for col in normalized.columns]
+        normalized = normalized.rename(
+            columns={col: rename_map.get(col.lower(), col) for col in normalized.columns}
+        )
+        return normalized
     
     def _get_model(self, model_type: str):
         """Lazy-load model by type."""
@@ -173,6 +195,8 @@ class UnifiedPredictor:
             return None
         
         try:
+            df = self._normalize_price_columns(df)
+
             if model_type == "ensemble":
                 # Ensemble already returns a dict
                 result_dict = model.predict(df)

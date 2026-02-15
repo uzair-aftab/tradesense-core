@@ -1,6 +1,7 @@
 """
 End-to-end ML training test script.
 """
+import pytest
 from src.data import stock_fetcher
 from src.ml import FeatureEngineer, SignalModel
 from sklearn.model_selection import train_test_split
@@ -22,6 +23,9 @@ def test_training():
     print(f"  - Features: {X.shape[1]} columns")
     print(f"  - Samples: {len(X)} rows")
     print(f"  - Target distribution: {y.value_counts(normalize=True).to_dict()}")
+
+    if len(X) < 20 or len(y) < 20:
+        pytest.skip("Insufficient samples for training split; requires more historical rows")
     
     # 3. Train/Test Split
     print("\n[3/4] Splitting data...")

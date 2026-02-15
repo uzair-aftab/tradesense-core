@@ -77,3 +77,12 @@ This page contains auto-generated API documentation from source code docstrings.
 
 ### Models
 ::: src.ml.models
+
+### Ensemble
+::: src.ml.ensemble
+
+### Predictor (Unified Interface)
+::: src.ml.predictor
+
+### Registry
+::: src.ml.registry

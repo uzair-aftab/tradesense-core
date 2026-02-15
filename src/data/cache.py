@@ -12,6 +12,7 @@ from typing import Any, Optional, Union
 from datetime import datetime, timedelta
 from pathlib import Path
 import pandas as pd
+import numpy as np
 
 from src.config import config
 from src.utils.logger import get_logger
@@ -94,6 +95,20 @@ class DataCache:
             conn.commit()
             
         logger.debug(f"Initialized cache database at {self.db_path}")
+
+    def _json_default(self, obj: Any) -> Any:
+        """JSON serializer for numpy/pandas objects."""
+        if isinstance(obj, (np.integer, np.floating)):
+            return obj.item()
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, pd.Series):
+            return obj.to_dict()
+        if isinstance(obj, pd.DataFrame):
+            return obj.to_dict(orient="records")
+        if isinstance(obj, (pd.Timestamp, datetime)):
+            return obj.isoformat()
+        return str(obj)
     
     def set(
         self,
@@ -123,10 +138,10 @@ class DataCache:
                 serialized = pickle.dumps(value)
                 data_type = "dataframe"
             elif isinstance(value, dict):
-                serialized = json.dumps(value).encode()
+                serialized = json.dumps(value, default=self._json_default).encode()
                 data_type = "dict"
             elif isinstance(value, (list, tuple)):
-                serialized = json.dumps(value).encode()
+                serialized = json.dumps(value, default=self._json_default).encode()
                 data_type = "list"
             else:
                 serialized = pickle.dumps(value)

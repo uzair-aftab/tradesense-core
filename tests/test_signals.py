@@ -13,15 +13,21 @@ def mock_generator():
     with patch("src.signals.generator.watchlist") as mock_wl, \
          patch("src.signals.generator.stock_fetcher") as mock_stock, \
          patch("src.signals.generator.technical_signal_generator") as mock_tech, \
-         patch("src.signals.generator.fundamentals_fetcher") as mock_fund, \
+         patch("src.signals.generator.fundamental_analyzer") as mock_fund_analyzer, \
          patch("src.signals.generator.sentiment_aggregator") as mock_sent, \
-         patch("src.signals.generator.options_fetcher") as mock_opt:
+         patch("src.signals.generator.options_analyzer") as mock_opt_analyzer, \
+         patch("src.signals.generator.unified_predictor") as mock_predictor, \
+         patch("src.signals.generator.support_resistance") as mock_sr, \
+         patch("src.signals.generator.tp_sl_calculator") as mock_tpsl:
         
         # Setup common mock returns
         # Mock price data to avoid empty df error
         import pandas as pd
         mock_stock.get_historical.return_value = pd.DataFrame({
-            "Close": [150.0], "High": [155.0], "Low": [145.0]
+            "Close": [149.0, 150.0],
+            "High": [154.0, 155.0],
+            "Low": [144.0, 145.0],
+            "Volume": [1_200_000, 1_300_000],
         })
         
         # Mock technical analysis
@@ -32,22 +38,37 @@ def mock_generator():
         }
         
         # Mock fundamentals
-        mock_fund.get_fundamental_signals.return_value = {
-            "fundamental_score": 0.7,
+        mock_fund_analyzer.analyze.return_value = {
+            "fundamental_score": 0.8,
+            "reasons": ["Strong revenue growth", "Healthy margins"],
             "details": {}
         }
         
         # Mock sentiment
         mock_sent.get_sentiment.return_value = {
-            "overall_score": 0.5,  # 0.5 is neutral/positive
+            "overall_score": 0.7,
             "signal": True
         }
         
         # Mock options
-        mock_opt.get_put_call_ratio.return_value = {
-            "signal": True,
-            "ratio": 0.6
+        mock_opt_analyzer.analyze.return_value = {
+            "options_score": 0.75,
+            "reasons": ["Bullish P/C ratio", "Call-side unusual activity"]
         }
+
+        # Mock ML predictor
+        mock_predictor.predict_with_fallback.return_value = MagicMock(
+            probability=0.85,
+            confidence=0.70,
+            model_type="ensemble"
+        )
+
+        # Mock support/resistance + TP/SL
+        mock_sr.find_levels.return_value = {
+            "nearest_support": 145.0,
+            "nearest_resistance": 160.0,
+        }
+        mock_tpsl.calculate.return_value = (160.0, 145.0)
 
         # Mock adaptive thresholds
         with patch("src.signals.generator.adaptive_thresholds") as mock_adaptive:
@@ -71,7 +92,7 @@ def test_generate_strong_buy_signal(mock_generator):
     
     assert isinstance(signal, TradingSignal)
     assert signal.signal_type == SignalType.BUY
-    assert signal.confidence > 0.4  # Adjusted based on weighted calculation
+    assert signal.confidence >= mock_generator.min_confidence
     assert signal.ticker == "AAPL"
     assert signal.entry_price == 150.0
     

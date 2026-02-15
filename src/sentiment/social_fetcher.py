@@ -159,7 +159,11 @@ class SocialFetcher:
         
         # Aggregate scores
         if scores:
-            overall_score = float(np.average(scores, weights=weights))
+            weight_sum = float(sum(weights))
+            if weight_sum > 0:
+                overall_score = float(np.average(scores, weights=weights))
+            else:
+                overall_score = float(np.mean(scores))
             
             # Determine signal
             if overall_score > 0.2:

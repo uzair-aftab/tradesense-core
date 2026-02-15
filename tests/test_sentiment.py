@@ -11,7 +11,7 @@ def mock_aggregator():
     """Create aggregator with mocked sources."""
     # Patch the INSTANCES imported in aggregator.py, not the classes
     with patch("src.sentiment.aggregator.news_fetcher") as mock_news, \
-         patch("src.sentiment.aggregator.reddit_sentiment") as mock_reddit, \
+         patch("src.sentiment.aggregator.social_fetcher") as mock_social, \
          patch("src.sentiment.aggregator.get_finbert_analyzer") as mock_get_bert, \
          patch("src.sentiment.aggregator.cache") as mock_cache:
         
@@ -26,12 +26,12 @@ def mock_aggregator():
         # Ensure lazy load uses our mock
         # We don't need to set agg.finbert manually because the property calls get_finbert_analyzer which is patched
         
-        yield agg, mock_news, mock_reddit, mock_bert_instance
+        yield agg, mock_news, mock_social, mock_bert_instance
 
 
 def test_sentiment_aggregation(mock_aggregator):
     """Test weighted score calculation."""
-    agg, mock_news, mock_reddit, mock_bert = mock_aggregator
+    agg, mock_news, mock_social, mock_bert = mock_aggregator
     
     # Setup return values
     mock_news.get_news.return_value = [
@@ -52,9 +52,12 @@ def test_sentiment_aggregation(mock_aggregator):
         {"title": "Apple stock soars", "sentiment": 0.7}
     ]
     
-    mock_reddit.get_reddit_sentiment_signal.return_value = {
-        "sentiment_score": 0.4,
-        "post_count": 10
+    mock_social.get_social_sentiment.return_value = {
+        "overall_score": 0.4,
+        "signal": True,
+        "confidence": 0.6,
+        "mention_count": 10,
+        "sources_used": ["reddit"]
     }
     
     # FinBERT mock (used inside _analyze_news if enabled)
@@ -74,10 +77,16 @@ def test_sentiment_aggregation(mock_aggregator):
 
 def test_empty_results(mock_aggregator):
     """Test handling of missing data."""
-    agg, mock_news, mock_reddit, _ = mock_aggregator
+    agg, mock_news, mock_social, _ = mock_aggregator
     
     mock_news.get_news.return_value = []
-    mock_reddit.get_reddit_sentiment_signal.return_value = {}
+    mock_social.get_social_sentiment.return_value = {
+        "overall_score": 0.0,
+        "signal": None,
+        "confidence": 0.0,
+        "mention_count": 0,
+        "sources_used": []
+    }
     
     result = agg.get_sentiment("UNKNOWN", use_cache=False)
     assert result["overall_score"] == 0.0
