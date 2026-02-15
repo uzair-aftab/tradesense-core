@@ -6,6 +6,14 @@ from .transformer_model import TransformerModel, transformer_model
 from .ensemble import EnsembleModel, ensemble_model
 from .optimization import ModelOptimizer, optimizer
 from .backtest import WalkForwardValidator
+from .registry import ModelRegistry, ModelMetadata, model_registry
+from .predictor import (
+    PredictionResult, 
+    UnifiedPredictor, 
+    unified_predictor,
+    interpret_probability,
+    calculate_confidence
+)
 
 __all__ = [
     'FeatureEngineer', 
@@ -15,5 +23,8 @@ __all__ = [
     'TransformerModel', 'transformer_model',
     'EnsembleModel', 'ensemble_model',
     'ModelOptimizer', 'optimizer',
-    'WalkForwardValidator'
+    'WalkForwardValidator',
+    'ModelRegistry', 'ModelMetadata', 'model_registry',
+    'PredictionResult', 'UnifiedPredictor', 'unified_predictor',
+    'interpret_probability', 'calculate_confidence'
 ]

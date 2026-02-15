@@ -26,7 +26,7 @@ from src.data.fetcher_fundamentals import fundamentals_fetcher
 from src.data.fetcher_options import options_fetcher
 from src.signals.tp_sl_calculator import tp_sl_calculator
 from src.sentiment import sentiment_aggregator
-from src.ml import FeatureEngineer, signal_model, ensemble_model
+from src.ml import FeatureEngineer, signal_model, ensemble_model, unified_predictor
 from src.config import config
 
 logger = get_logger(__name__)
@@ -271,29 +271,23 @@ class SignalGenerator:
             except Exception as e:
                 logger.warning(f"Options analysis failed for {ticker}: {e}")
         
-        # ML Model Prediction (using Ensemble: XGB + LSTM + Transformer)
+        # ML Model Prediction (unified interface with fallback)
         ml_score = None
         try:
-            # Use ensemble for combined prediction
-            ensemble_result = ensemble_model.predict(df)
-            ml_score = ensemble_result.get("probability")
-            components = ensemble_result.get('components', {})
-            active_models = [k for k, v in components.items() if v is not None]
-            if ml_score is not None and active_models:
-                reasons.append(f"ML Ensemble ({', '.join(active_models)}): {ml_score:.0%} bullish")
+            # Use unified predictor with automatic fallback
+            ml_result = unified_predictor.predict_with_fallback(
+                df,
+                preferred_models=["ensemble", "xgboost", "lstm"]
+            )
+            
+            if ml_result:
+                ml_score = ml_result.probability
+                reasons.append(
+                    f"ML {ml_result.model_type.upper()}: "
+                    f"{ml_score:.0%} bullish (conf: {ml_result.confidence:.0%})"
+                )
         except Exception as e:
             logger.warning(f"ML prediction failed for {ticker}: {e}")
-            # Fallback to XGBoost only
-            try:
-                if signal_model.is_trained:
-                    feature_engineer = FeatureEngineer()
-                    features_df = feature_engineer.calculate_features(df, include_targets=False)
-                    if not features_df.empty:
-                        X_latest = features_df[feature_engineer.feature_columns].iloc[[-1]]
-                        ml_score = signal_model.predict_proba(X_latest)[0]
-                        reasons.append(f"ML (XGB Fallback): {ml_score:.0%}")
-            except Exception as e2:
-                logger.warning(f"XGB fallback also failed: {e2}")
         
         scores = {
             "technical": technical_score,
