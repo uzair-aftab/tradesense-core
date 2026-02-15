@@ -22,7 +22,17 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.ml import Timeframe, mtf_engine, ensemble_model, FeatureEngineer
+from src.ml import (
+    Timeframe,
+    mtf_engine,
+    ensemble_model,
+    FeatureEngineer,
+    unified_predictor,
+    model_registry,
+)
+from src.ml.models import signal_model
+from src.ml.lstm_model import lstm_model
+from src.ml.transformer_model import transformer_model
 from src.signals.timeframe_generator import timeframe_signal_generator, TradeSetup
 from src.trading.trading_station import trading_station
 from src.utils.logger import get_logger
@@ -267,6 +277,92 @@ def render_analytics():
         st.metric("Profit Factor", f"{analytics['profit_factor']:.1f}")
 
 
+def render_trade_thesis_native(setup: TradeSetup):
+    """Render a concise narrative explaining why this trade exists."""
+    components = [
+        ("Technical", setup.technical_score),
+        ("Fundamental", setup.fundamental_score),
+        ("Sentiment", setup.sentiment_score),
+        ("ML", setup.ml_score),
+    ]
+
+    active_components = [(name, score) for name, score in components if score is not None]
+    active_scores = [score for _, score in active_components]
+    coverage = len(active_components) / len(components) if components else 0.0
+    composite = float(np.mean(active_scores)) if active_scores else 0.5
+    decision_strength = abs(composite - 0.5) * 2
+
+    regime = "Unknown"
+    for reason in setup.reasons:
+        if reason.startswith("Regime:"):
+            regime = reason.replace("Regime:", "").strip()
+            break
+
+    top_drivers = sorted(
+        active_components,
+        key=lambda item: abs(item[1] - 0.5),
+        reverse=True
+    )[:2]
+    driver_text = ", ".join(f"{name} {score:.0%}" for name, score in top_drivers) if top_drivers else "N/A"
+
+    thesis = "Neutral bias due to mixed factors"
+    if setup.direction == "LONG":
+        thesis = "Bullish bias: upside factors dominate"
+    elif setup.direction == "SHORT":
+        thesis = "Bearish bias: downside pressure dominates"
+
+    st.subheader("🧠 Why This Trade")
+    st.write(thesis)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("Regime", regime)
+        st.metric("Composite", f"{composite:.0%}")
+        st.metric("Coverage", f"{coverage:.0%}")
+    with c2:
+        st.metric("Decision Strength", f"{decision_strength:.0%}")
+        st.metric("Risk:Reward", f"1:{setup.risk_reward_ratio:.2f}")
+        st.metric("Duration", setup.duration)
+
+    st.caption(f"Top drivers: {driver_text}")
+
+
+def render_ml_metadata_panel(ml_info: dict):
+    """Render model availability, ensemble composition, and registry context."""
+    st.subheader("🤖 ML Metadata")
+
+    prediction_source = ml_info.get("source", "N/A")
+    probability = ml_info.get("probability")
+    confidence = ml_info.get("confidence")
+
+    pcol1, pcol2 = st.columns(2)
+    with pcol1:
+        st.metric("Prediction Source", prediction_source.upper())
+        st.metric("ML Probability", f"{probability:.0%}" if probability is not None else "N/A")
+    with pcol2:
+        st.metric("ML Confidence", f"{confidence:.0%}" if confidence is not None else "N/A")
+        st.metric("Registry Models", str(len(model_registry.models)))
+
+    active_models = []
+    if signal_model.is_trained:
+        active_models.append("XGBoost")
+    if lstm_model.is_trained:
+        active_models.append("LSTM")
+    if transformer_model.is_trained:
+        active_models.append("Transformer")
+
+    st.write("**Active models:** " + (", ".join(active_models) if active_models else "None"))
+
+    try:
+        best = model_registry.get_best_model(metric="accuracy")
+        if best:
+            st.caption(f"Best registered model: {best.model_name} v{best.version} • acc={best.accuracy:.1%}")
+        else:
+            st.caption("No registered model metrics yet.")
+    except Exception:
+        st.caption("Model registry metadata unavailable.")
+
+
 # ============================================================================
 # MAIN APP
 # ============================================================================
@@ -338,6 +434,19 @@ def main():
                 predictions = None
         except:
             predictions = None
+
+        # Unified predictor context for UI metadata
+        ml_info = {"source": "none", "probability": None, "confidence": None}
+        try:
+            pred = unified_predictor.predict_with_fallback(df, preferred_models=["ensemble", "xgboost", "lstm"])
+            if pred is not None:
+                ml_info = {
+                    "source": pred.model_type,
+                    "probability": pred.probability,
+                    "confidence": pred.confidence,
+                }
+        except Exception as e:
+            logger.warning(f"Unified predictor UI context failed: {e}")
         
         # Update position prices
         trading_station.update_prices({ticker: current_price})
@@ -374,6 +483,9 @@ def main():
     
     with signal_col:
         render_signal_card_native(setup)
+        render_trade_thesis_native(setup)
+        st.divider()
+        render_ml_metadata_panel(ml_info)
         
         st.divider()
         
