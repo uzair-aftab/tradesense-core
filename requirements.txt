@@ -17,40 +17,27 @@ finnhub-python>=2.4.19
 # ----- Technical Analysis -----
 pandas-ta>=0.3.14b0
 
-# ----- Backtesting / Metrics -----
-vectorbt>=0.26.0
-kaleido>=0.2.1
-anywidget>=0.9.0
+# ----- ML / AI -----
+scikit-learn>=1.4.0
+xgboost>=2.0.0
 
 # ----- Sentiment Analysis (NLP) -----
-transformers>=4.40.0          # FinBERT (ProsusAI/finbert)
-sentence-transformers>=2.5.0
-vaderSentiment>=3.3.2         # VADER fallback sentiment
+transformers>=4.40.0              # FinBERT (ProsusAI/finbert)
+vaderSentiment>=3.3.2             # VADER fallback sentiment
 
 # ----- Social / News APIs -----
 praw>=7.7.1
 requests>=2.31.0
 
-# ----- ML / AI -----
-scikit-learn>=1.4.0
-xgboost>=2.0.0
-
-# ----- Data Processing -----
-polars>=0.20.0                # Fast DataFrame alternative
-
 # ----- Async I/O -----
 aiohttp>=3.9.0
-aiofiles>=23.2.1
-
-# ----- Database / Caching -----
-sqlalchemy>=2.0.0
 
 # ----- UI -----
 streamlit>=1.31.0
 plotly>=5.18.0
 
-# ----- Scheduling -----
-apscheduler>=3.10.4
+# ----- System -----
+psutil>=5.9.0
 
 # ----- Core -----
 pandas>=2.2.0

@@ -29,7 +29,7 @@ Usage
 from __future__ import annotations
 
 import asyncio
-import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Literal, Optional, Tuple, Union
@@ -40,15 +40,10 @@ import pandas_ta as ta
 import yfinance as yf
 from sklearn.preprocessing import MinMaxScaler
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
-logger = logging.getLogger("hfp.data_feed")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    _h = logging.StreamHandler()
-    _h.setFormatter(logging.Formatter("%(asctime)s | %(name)s | %(levelname)s | %(message)s"))
-    logger.addHandler(_h)
+from src.data.cache import DataCache
+from src.utils.logger import get_logger
+
+logger = get_logger("hfp.data_feed")
 
 # ---------------------------------------------------------------------------
 # Type aliases
@@ -90,12 +85,26 @@ class DataLake:
         Z-score above which a bar is flagged as a whale event.
     scaler : MinMaxScaler | None
         Reusable scaler instance (persisted across retrains).
+    use_cache : bool
+        If True, cache fetch() results in SQLite for TTL-based reuse.
+    cache_ttl : int
+        Cache time-to-live in seconds (default 1 hour).
+    max_retries : int
+        Number of retries on fetch failure (exponential backoff).
     """
 
     sentiment_backend: Literal["finbert", "vader"] = "finbert"
     whale_z_threshold: float = WHALE_Z_THRESHOLD
     scaler: Optional[MinMaxScaler] = None
+    use_cache: bool = True
+    cache_ttl: int = 3600
+    max_retries: int = 3
     _sentiment_engine: Optional[object] = field(default=None, repr=False, init=False)
+    _cache: DataCache = field(default=None, repr=False, init=False)
+
+    def __post_init__(self):
+        if self.use_cache:
+            self._cache = DataCache()
 
     # ── public ────────────────────────────────────────────────────────────
 
@@ -127,14 +136,37 @@ class DataLake:
         pd.DataFrame
             Clean OHLCV DataFrame indexed by datetime.
         """
+        # ── Check cache first ──────────────────────────────────────
+        cache_key = f"fetch:{ticker}:{timeframe}:{lookback}"
+        if self.use_cache and self._cache and not (start or end):
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                logger.info("Cache HIT for %s (%d bars)", cache_key, len(cached))
+                return cached
+
         logger.info("Fetching %s  tf=%s  lookback=%s", ticker, timeframe, lookback)
 
-        tkr = yf.Ticker(ticker)
-
-        if start and end:
-            df = tkr.history(interval=timeframe, start=start, end=end, auto_adjust=True)
-        else:
-            df = tkr.history(interval=timeframe, period=lookback, auto_adjust=True)
+        # ── Fetch with retry logic ────────────────────────────────
+        df = pd.DataFrame()
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                tkr = yf.Ticker(ticker)
+                if start and end:
+                    df = tkr.history(interval=timeframe, start=start, end=end, auto_adjust=True)
+                else:
+                    df = tkr.history(interval=timeframe, period=lookback, auto_adjust=True)
+                break
+            except Exception as exc:
+                wait = 2 ** attempt
+                logger.warning(
+                    "Fetch attempt %d/%d failed for %s: %s — retrying in %ds",
+                    attempt, self.max_retries, ticker, exc, wait,
+                )
+                if attempt < self.max_retries:
+                    time.sleep(wait)
+                else:
+                    logger.error("All %d fetch attempts failed for %s", self.max_retries, ticker)
+                    return pd.DataFrame(columns=OHLCV_COLS)
 
         if df.empty:
             logger.warning("No data returned for %s (%s / %s)", ticker, timeframe, lookback)
@@ -148,6 +180,11 @@ class DataLake:
 
         df = df[OHLCV_COLS].copy()
         df.dropna(subset=["Close", "Volume"], inplace=True)
+
+        # ── Store in cache ────────────────────────────────────────
+        if self.use_cache and self._cache and not (start or end):
+            self._cache.set(cache_key, df, ttl=self.cache_ttl)
+            logger.info("Cached %d bars for %s (TTL=%ds)", len(df), ticker, self.cache_ttl)
 
         logger.info("Fetched %d bars for %s", len(df), ticker)
         return df

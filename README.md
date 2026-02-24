@@ -1,27 +1,27 @@
-# TradeSense
+# TradeSense HFP
 
-> **Multi-Factor Trading Signal Scanner** - A sophisticated Python-based trading signal scanner that combines technical indicators, fundamental analysis, sentiment analysis (NLP/LLM), options flow, and ML predictions to generate high-confidence buy/sell signals.
+> **High-Frequency Prediction & Paper Trading System** — An institutional-grade trading platform combining LSTM + XGBoost ensemble predictions with quantile output (P10/P50/P90), paper trading with realistic market friction, and GPU-accelerated sentiment analysis.
 
-[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![CUDA](https://img.shields.io/badge/CUDA-12.4-green.svg)](https://developer.nvidia.com/cuda-toolkit)
+[![CUDA](https://img.shields.io/badge/CUDA-11.8-green.svg)](https://developer.nvidia.com/cuda-toolkit)
 
 ## 🎯 Features
 
-- **Technical Analysis**: RSI, MACD, Bollinger Bands, Volume analysis, Support/Resistance
-- **Fundamental Analysis**: P/E ratios, EPS beat/miss, Revenue beat/miss
-- **Sentiment Analysis**: FinBERT NLP model, Reddit (WSB), StockTwits, Financial news
-- **Options Flow**: Put/Call ratio analysis
-- **Adaptive Thresholds**: Volatility-based dynamic threshold adjustment
-- **Backtesting**: Historical performance validation with vectorbt
-- **ML Predictions**: XGBoost and LSTM models for signal enhancement
+- **Hybrid AI Engine** — LSTM (temporal patterns) + XGBoost (feature importance) → Ridge meta-learner → P10/P50/P90 quantile output
+- **GPU Accelerated** — LSTM + FinBERT on CUDA (RTX 4070), XGBoost GPU training
+- **Paper Trading** — "The Gauntlet" simulator with slippage, commission, stop-loss, take-profit
+- **Whale Tracker** — Custom volume anomaly detector (z-score on rolling window)
+- **Sentiment Analysis** — FinBERT (GPU) with VADER fallback, normalised to [-1, 1]
+- **Data Caching** — SQLite TTL cache for API responses, eliminates redundant fetches
+- **Portfolio Persistence** — JSON state saves survive app restarts
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 
-- Python 3.12
-- NVIDIA GPU with CUDA 12.4 support (recommended)
+- Python 3.10+
+- NVIDIA GPU with CUDA 11.8 support (recommended)
 - Git
 
 ### Installation
@@ -32,34 +32,23 @@ git clone https://github.com/uzair-aftab/tradesense.git
 cd tradesense
 
 # Create virtual environment
-py -3.12 -m venv venv
+python -m venv venv
 ./venv/Scripts/Activate.ps1  # Windows PowerShell
 
-# Install PyTorch with CUDA support
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+# Install PyTorch with CUDA support (FIRST)
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Install dev dependencies (optional)
-pip install -r requirements-dev.txt
-
 # Copy environment template and add your API keys
 cp .env.example .env
-# Edit .env with your API keys
 ```
 
 ### Running the App
 
 ```bash
-# Start Streamlit dashboard
-streamlit run app/main.py
-
-# Run backtesting
-python -m src.backtesting.engine
-
-# Serve documentation locally
-mkdocs serve
+streamlit run src/ui/app.py
 ```
 
 ## 📊 Watchlists
@@ -77,26 +66,28 @@ Default watchlists (5 per category, expandable):
 
 ```
 tradesense/
-├── app/                    # Streamlit UI
-├── src/                    # Core source code
-│   ├── data/              # Data fetchers & caching
-│   ├── sentiment/         # NLP & sentiment analysis
-│   ├── analysis/          # Technical & fundamental analysis
-│   ├── signals/           # Signal generation
-│   ├── backtesting/       # Backtest engine
-│   └── ml/                # Machine learning models
-├── docs/                   # MkDocs documentation
-├── tests/                  # Unit & integration tests
-└── data/                   # Local cache (gitignored)
+├── .agents/workflows/       # Agent runbooks (launch, develop)
+├── src/
+│   ├── config.py            # Central configuration
+│   ├── data/
+│   │   ├── data_feed.py     # DataLake — OHLCV + features + sentiment
+│   │   ├── cache.py         # SQLite TTL cache
+│   │   └── watchlists.py    # Managed asset lists
+│   ├── models/
+│   │   ├── ai_engine.py     # LSTM+XGB+Ridge ensemble
+│   │   └── trader.py        # Gauntlet paper trading simulator
+│   ├── ui/
+│   │   └── app.py           # Streamlit War Room dashboard
+│   └── utils/
+│       ├── logger.py        # Shared logging
+│       └── health.py        # System diagnostics
+├── data/                    # SQLite cache, paper portfolio (gitignored)
+├── models/hfp/              # Saved model weights (gitignored)
+├── logs/                    # Log files (gitignored)
+├── ARCHITECTURE.md          # System architecture reference
+├── requirements.txt         # Python dependencies
+└── README.md                # This file
 ```
-
-## 📖 Documentation
-
-Full documentation available at: [docs/](docs/)
-
-- [Getting Started](docs/getting-started.md)
-- [Configuration](docs/configuration.md)
-- [API Reference](docs/api/reference.md)
 
 ## 🔧 Configuration
 
@@ -108,39 +99,25 @@ FINNHUB_API_KEY=your_key_here
 REDDIT_CLIENT_ID=your_client_id
 REDDIT_CLIENT_SECRET=your_client_secret
 
-# Scanner Settings
-SCAN_INTERVAL_SECONDS=300
-BATCH_MODE=false
+# Engine Defaults
+LSTM_EPOCHS=50
+XGB_ESTIMATORS=500
+STARTING_CAPITAL=10000
+SENTIMENT_BACKEND=vader
 ```
 
-## 📈 Signal Thresholds (Default)
+## 📈 How It Works
 
-| Indicator | Buy Signal Condition |
-|-----------|---------------------|
-| RSI | ≤ 20 (oversold) |
-| MACD | Bullish crossover |
-| Bollinger | Price near lower band |
-| Volume | > 20-day average |
-| Put/Call | < 0.7 |
-| P/E Ratio | Below industry average |
-
-## 🧪 Testing
-
-```bash
-# Run all tests
-pytest
-
-# Run with coverage
-pytest --cov=src
-```
-
-## 📝 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+1. **Fetch** — Pull OHLCV data from yfinance (cached in SQLite)
+2. **Engineer** — Compute 20+ technical features (ADX, MACD, Ichimoku, ATR, BBWidth, OBV, VWAP, Whale Tracker)
+3. **Sentiment** — Score headlines via FinBERT (GPU) or VADER
+4. **Train** — LSTM (sequential patterns) + XGBoost (cross-sectional) → Ridge meta-blend
+5. **Predict** — Quantile output: P10 (conservative), P50 (likely), P90 (aggressive)
+6. **Trade** — Paper trade with realistic slippage, stop-loss, take-profit
 
 ## ⚠️ Disclaimer
 
-This software is for educational and research purposes only. It is not financial advice. Always do your own research and consult with a qualified financial advisor before making investment decisions. Past performance does not guarantee future results.
+This software is for educational and research purposes only. It is not financial advice. Always do your own research and consult with a qualified financial advisor before making investment decisions.
 
 ---
 

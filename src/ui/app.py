@@ -7,26 +7,23 @@ Institutional-grade Streamlit dashboard for the HFP system.
 Layout
 ------
 ┌─────────────────────────────────────────────────────────┐
-│  Sidebar: Ticker | Timeframe | Sniper Toggle | Health  │
+│  Sidebar: Watchlist | Ticker | Timeframe | Health       │
 ├─────────────────────────────────────────────────────────┤
 │  Top Bar: Equity | P&L | Sharpe | Drawdown | Win Rate  │
 ├──────────────────────────────┬──────────────────────────┤
-│                              │  Prediction Panel       │
-│  Plotly Candlestick +        │  P10 / P50 / P90        │
+│                              │  Prediction Panel        │
+│  Plotly Candlestick +        │  P10 / P50 / P90         │
 │  Confidence Cloud +          │  Confidence %            │
 │  Predicted Path              │  Direction               │
 │                              ├──────────────────────────┤
 │                              │  Trade Controls          │
-│                              │  Buy/Sell + Pos Sizer    │
+│                              │  Buy/Sell + Stop/TP      │
 ├──────────────────────────────┴──────────────────────────┤
-│  Positions | Trade History | Feature Importance          │
+│  Positions | Trade History | Feature Importance | Health │
 └─────────────────────────────────────────────────────────┘
 
 Usage
 -----
-    streamlit run src/ui/app.py -- --port 8501
-
-    or from project root:
     streamlit run src/ui/app.py
 """
 
@@ -46,9 +43,12 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
+from src.config import config
 from src.data.data_feed import DataLake
+from src.data.watchlists import WatchlistManager, AssetCategory
 from src.models.ai_engine import AIEngine, QuantilePrediction
 from src.models.trader import Gauntlet, TradeOrder, Side
+from src.utils.health import HealthCheck
 
 # ---------------------------------------------------------------------------
 #  Page config
@@ -61,29 +61,92 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------------------------
-#  Dark theme CSS
+#  Premium CSS
 # ---------------------------------------------------------------------------
 st.markdown(
     """
     <style>
-    /* Dark background */
-    .stApp { background-color: #0e1117; }
-    /* Metric cards */
-    div[data-testid="stMetric"] {
-        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-        border: 1px solid #30363d;
-        border-radius: 10px;
-        padding: 12px 16px;
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+    /* Global */
+    .stApp {
+        background: linear-gradient(180deg, #0a0a1a 0%, #0e1117 50%, #0a0e1a 100%);
+        font-family: 'Inter', sans-serif;
     }
-    div[data-testid="stMetricValue"] { font-size: 1.4rem; }
-    /* Health indicator */
+
+    /* Metric cards — glassmorphism */
+    div[data-testid="stMetric"] {
+        background: rgba(26, 26, 46, 0.6);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(99, 110, 250, 0.15);
+        border-radius: 12px;
+        padding: 14px 18px;
+        transition: all 0.3s ease;
+    }
+    div[data-testid="stMetric"]:hover {
+        border-color: rgba(99, 110, 250, 0.4);
+        box-shadow: 0 0 20px rgba(99, 110, 250, 0.1);
+    }
+    div[data-testid="stMetricValue"] { font-size: 1.3rem; font-weight: 600; }
+
+    /* Health badges */
     .health-green { color: #00ff88; font-weight: 700; }
     .health-yellow { color: #ffa500; font-weight: 700; }
     .health-red { color: #ff4444; font-weight: 700; }
-    /* Confidence Cloud label */
-    .cloud-label {
-        font-size: 0.85rem; color: #8b949e;
-        text-transform: uppercase; letter-spacing: 1px;
+
+    /* Section headers */
+    .section-header {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        color: #6b7280;
+        margin-bottom: 8px;
+        font-weight: 600;
+    }
+
+    /* Live badge */
+    .live-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: rgba(255, 68, 68, 0.15);
+        border: 1px solid rgba(255, 68, 68, 0.3);
+        border-radius: 20px;
+        padding: 2px 12px;
+        font-size: 0.7rem;
+        color: #ff4444;
+        font-weight: 600;
+        animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+    }
+
+    /* Sidebar styling */
+    section[data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #0d1117 0%, #161b22 100%);
+        border-right: 1px solid rgba(48, 54, 61, 0.5);
+    }
+
+    /* Button styling */
+    .stButton > button {
+        border-radius: 8px;
+        font-weight: 600;
+        transition: all 0.2s ease;
+    }
+    .stButton > button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+
+    /* Tab styling */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 8px 8px 0 0;
     }
     </style>
     """,
@@ -97,16 +160,21 @@ st.markdown(
 def _init_state() -> None:
     """Ensure all session-state keys exist."""
     defaults = {
-        "lake": DataLake(sentiment_backend="vader"),
-        "engine": AIEngine(lstm_epochs=30, xgb_estimators=300, seq_len=20),
-        "gauntlet": Gauntlet(starting_capital=10_000, seed=42),
+        "lake": DataLake(sentiment_backend=config.SENTIMENT_BACKEND),
+        "engine": AIEngine(
+            lstm_epochs=config.LSTM_EPOCHS,
+            xgb_estimators=config.XGB_ESTIMATORS,
+            seq_len=config.LSTM_SEQ_LEN,
+        ),
+        "gauntlet": Gauntlet(starting_capital=config.STARTING_CAPITAL, seed=42),
+        "watchlist": WatchlistManager(),
         "trained": False,
         "raw_df": None,
         "feat_df": None,
         "prediction": None,
         "ticker": "AAPL",
-        "timeframe": "1d",
-        "lookback": "1y",
+        "timeframe": config.DEFAULT_TIMEFRAME,
+        "lookback": config.DEFAULT_LOOKBACK,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -121,37 +189,56 @@ _init_state()
 # ---------------------------------------------------------------------------
 def _render_sidebar() -> None:
     with st.sidebar:
-        st.title("🎯 HFP War Room")
+        st.markdown("## 🎯 HFP War Room")
         st.caption("High-Frequency Prediction Engine")
 
         st.divider()
 
-        # Ticker
-        st.session_state.ticker = st.text_input(
-            "Ticker Symbol",
-            value=st.session_state.ticker,
-            placeholder="AAPL",
-        ).upper().strip()
+        # ── Watchlist selector ─────────────────────────────────────
+        st.markdown('<p class="section-header">📋 Watchlist</p>', unsafe_allow_html=True)
+        wm: WatchlistManager = st.session_state.watchlist
+        category = st.selectbox(
+            "Category",
+            [c.value for c in AssetCategory],
+            format_func=lambda x: x.replace("_", " ").title(),
+            label_visibility="collapsed",
+        )
+        cat_enum = AssetCategory(category)
+        tickers = wm.get_tickers(cat_enum)
 
-        # Timeframe selector
+        selected = st.selectbox("Ticker", tickers, label_visibility="collapsed")
+        if selected:
+            st.session_state.ticker = selected
+
+        # Manual ticker override
+        custom = st.text_input(
+            "Or type ticker",
+            value="",
+            placeholder="e.g. TSLA",
+        ).upper().strip()
+        if custom:
+            st.session_state.ticker = custom
+
+        st.divider()
+
+        # ── Timeframe & Lookback ───────────────────────────────────
+        st.markdown('<p class="section-header">⏱ Settings</p>', unsafe_allow_html=True)
         tf_options = {"12 Hours": "1h", "1 Day": "1d"}
         tf_label = st.selectbox("Prediction Horizon", list(tf_options.keys()), index=1)
         st.session_state.timeframe = tf_options[tf_label]
 
-        # Lookback
         lb_options = {"3 Months": "3mo", "6 Months": "6mo", "1 Year": "1y", "2 Years": "2y"}
         lb_label = st.selectbox("Training Lookback", list(lb_options.keys()), index=2)
         st.session_state.lookback = lb_options[lb_label]
 
-        st.divider()
-
-        # Sniper mode toggle
         sniper = st.toggle("🎯 Sniper Mode", value=False, help="Only show predictions with >80% confidence")
         st.session_state["sniper_mode"] = sniper
 
         st.divider()
 
-        # Model Health Indicator
+        # ── Health Dashboard ───────────────────────────────────────
+        st.markdown('<p class="section-header">💊 System Health</p>', unsafe_allow_html=True)
+
         engine: AIEngine = st.session_state.engine
         health = engine.health
         color_class = f"health-{health}"
@@ -163,9 +250,16 @@ def _render_sidebar() -> None:
             st.caption(f"Meta MAE: {r.meta_mae:.6f}" if r.meta_mae else "No training data")
             st.caption(f"Trained in {r.duration_sec:.1f}s")
 
+        # Compact health indicators
+        try:
+            health_summary = HealthCheck.summary_emoji()
+            st.caption(health_summary)
+        except Exception:
+            pass
+
         st.divider()
 
-        # Action buttons
+        # ── Action Buttons ─────────────────────────────────────────
         col1, col2 = st.columns(2)
         with col1:
             if st.button("🔄 Fetch Data", use_container_width=True):
@@ -179,7 +273,8 @@ def _render_sidebar() -> None:
 
         st.divider()
 
-        # Account summary
+        # ── Account Summary ────────────────────────────────────────
+        st.markdown('<p class="section-header">💰 Account</p>', unsafe_allow_html=True)
         sim: Gauntlet = st.session_state.gauntlet
         st.metric("Cash", f"${sim.cash:,.2f}")
         st.metric("Total Equity", f"${sim.total_equity:,.2f}")
@@ -262,6 +357,12 @@ def _render_chart() -> None:
     pred: QuantilePrediction = st.session_state.prediction
     ticker = st.session_state.ticker
 
+    # Live badge
+    st.markdown(
+        f'<span class="live-badge">● LIVE</span> <strong>{ticker}</strong> — HFP Analysis',
+        unsafe_allow_html=True,
+    )
+
     fig = make_subplots(
         rows=2,
         cols=1,
@@ -286,11 +387,25 @@ def _render_chart() -> None:
         col=1,
     )
 
+    # ── Moving Averages ───────────────────────────────────────────────
+    if len(raw) >= 20:
+        ma20 = raw["Close"].rolling(20).mean()
+        fig.add_trace(
+            go.Scatter(x=raw.index, y=ma20, name="MA20",
+                       line=dict(color="#636efa", width=1, dash="dot"), opacity=0.7),
+            row=1, col=1,
+        )
+    if len(raw) >= 50:
+        ma50 = raw["Close"].rolling(50).mean()
+        fig.add_trace(
+            go.Scatter(x=raw.index, y=ma50, name="MA50",
+                       line=dict(color="#ffa500", width=1, dash="dot"), opacity=0.7),
+            row=1, col=1,
+        )
+
     # ── Confidence Cloud ──────────────────────────────────────────────
     if pred is not None:
         last_date = raw.index[-1]
-        # Extend a few bars into the future for the prediction zone
-        cloud_x = [last_date, last_date]
 
         # Shaded region between P10 and P90
         fig.add_shape(
@@ -348,13 +463,14 @@ def _render_chart() -> None:
 
     # ── Layout ────────────────────────────────────────────────────────
     fig.update_layout(
-        title=f"{ticker} — HFP Analysis",
         template="plotly_dark",
         height=650,
         xaxis_rangeslider_visible=False,
         showlegend=True,
         legend=dict(orientation="h", y=1.12),
-        margin=dict(l=60, r=20, t=80, b=20),
+        margin=dict(l=60, r=20, t=40, b=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(10,10,26,0.8)",
     )
     fig.update_yaxes(title_text="Price ($)", row=1, col=1)
     fig.update_yaxes(title_text="Volume", row=2, col=1)
@@ -427,6 +543,26 @@ def _render_trade_controls() -> None:
     # Manual quantity override
     qty = st.number_input("Shares", min_value=1, value=max(1, suggested_shares), step=1)
 
+    # ── Stop-Loss / Take-Profit ─────────────────────────────────────
+    st.markdown("##### 🛡 Risk Management")
+    sl_col, tp_col = st.columns(2)
+    with sl_col:
+        stop_loss = st.number_input(
+            "Stop-Loss ($)",
+            min_value=0.0,
+            value=round(stop_price, 2),
+            step=0.50,
+            format="%.2f",
+        )
+    with tp_col:
+        take_profit = st.number_input(
+            "Take-Profit ($)",
+            min_value=0.0,
+            value=round(current_price * 1.05, 2),
+            step=0.50,
+            format="%.2f",
+        )
+
     # Buy / Sell
     c1, c2 = st.columns(2)
     with c1:
@@ -435,6 +571,11 @@ def _render_trade_controls() -> None:
                 fill = sim.submit_order(
                     TradeOrder(ticker=ticker, side=Side.BUY, quantity=int(qty), price=current_price)
                 )
+                # Set stop-loss and take-profit
+                if stop_loss > 0:
+                    sim.set_stop_loss(ticker, stop_loss)
+                if take_profit > 0:
+                    sim.set_take_profit(ticker, take_profit)
                 st.success(f"BUY {fill.quantity} @ ${fill.fill_price:.2f} (comm=${fill.commission:.2f})")
             except ValueError as e:
                 st.error(str(e))
@@ -482,7 +623,9 @@ def _render_metrics_bar() -> None:
 def _render_positions() -> None:
     sim: Gauntlet = st.session_state.gauntlet
 
-    tab1, tab2, tab3 = st.tabs(["📊 Positions", "📜 Trade History", "📈 Feature Importance"])
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📊 Positions", "📜 Trade History", "📈 Feature Importance", "💊 System Health"
+    ])
 
     with tab1:
         pos_df = sim.positions_summary()
@@ -516,10 +659,35 @@ def _render_positions() -> None:
                 height=400,
                 yaxis=dict(autorange="reversed"),
                 margin=dict(l=150),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(10,10,26,0.8)",
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.caption("Train model to see feature importance")
+
+    with tab4:
+        try:
+            report = HealthCheck.run_all()
+            h1, h2, h3 = st.columns(3)
+            with h1:
+                gpu = report["gpu"]
+                st.metric("GPU", "✅ Available" if gpu["available"] else "❌ N/A")
+                if gpu["available"]:
+                    st.caption(f'{gpu["device_name"]}')
+                    st.caption(f'VRAM: {gpu["memory_allocated"]}')
+            with h2:
+                st.metric("Internet", "✅ Connected" if report["internet"] else "❌ Offline")
+                mem = report["memory"]
+                st.caption(f'RAM: {mem["available"]} / {mem["total"]}')
+            with h3:
+                models = report["models"]
+                ready = sum(1 for v in models.values() if v)
+                st.metric("Models", f"{ready}/{len(models)} loaded")
+                cache = report["cache"]
+                st.caption(f'Cache: {cache["size"]}')
+        except Exception as e:
+            st.error(f"Health check error: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -555,6 +723,8 @@ def _render_equity_curve() -> None:
         height=250,
         margin=dict(l=60, r=20, t=20, b=20),
         yaxis_title="Equity ($)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(10,10,26,0.8)",
     )
     st.plotly_chart(fig, use_container_width=True)
 
