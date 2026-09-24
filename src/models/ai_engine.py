@@ -60,7 +60,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, RobustScaler
 
 from src.utils.logger import get_logger
 
@@ -261,6 +261,7 @@ class LSTMBaseLeaner:
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer, patience=5, factor=0.5
         )
+        self.scaler_x = RobustScaler()
         self.scaler_y = MinMaxScaler()
         self._trained = False
 
@@ -287,10 +288,14 @@ class LSTMBaseLeaner:
 
         Returns final epoch loss.
         """
+        # Clean and robust-scale input features to normalize ranges & prevent exploding gradients
+        X_clean = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+        X_scaled = self.scaler_x.fit_transform(X_clean)
+
         # Scale target to [0, 1]
         y_scaled = self.scaler_y.fit_transform(y.reshape(-1, 1)).ravel()
 
-        Xt, yt = self._make_sequences(X, y_scaled)
+        Xt, yt = self._make_sequences(X_scaled, y_scaled)
         if Xt.shape[0] == 0:
             logger.warning("Not enough data for LSTM sequences (need > %d rows)", self.seq_len)
             return float("inf")
@@ -351,7 +356,9 @@ class LSTMBaseLeaner:
         if not self._trained:
             raise RuntimeError("LSTM not trained yet — call .train() first")
 
-        Xt, _ = self._make_sequences(X)
+        X_clean = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+        X_scaled = self.scaler_x.transform(X_clean)
+        Xt, _ = self._make_sequences(X_scaled)
         if Xt.shape[0] == 0:
             empty = np.array([])
             return empty, empty, empty
@@ -374,6 +381,7 @@ class LSTMBaseLeaner:
         torch.save(
             {
                 "model_state": self.model.state_dict(),
+                "scaler_x": self.scaler_x,
                 "scaler_y": self.scaler_y,
                 "input_dim": self.input_dim,
                 "seq_len": self.seq_len,
@@ -387,6 +395,8 @@ class LSTMBaseLeaner:
         path = path or MODELS_DIR / "lstm_quantile.pt"
         ckpt = torch.load(path, map_location=DEVICE, weights_only=False)
         self.model.load_state_dict(ckpt["model_state"])
+        if "scaler_x" in ckpt:
+            self.scaler_x = ckpt["scaler_x"]
         if "scaler_y" in ckpt:
             self.scaler_y = ckpt["scaler_y"]
         else:
