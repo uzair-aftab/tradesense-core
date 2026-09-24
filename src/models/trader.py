@@ -178,6 +178,14 @@ class PortfolioMetrics:
     avg_win: float = 0.0
     avg_loss: float = 0.0
 
+    @property
+    def realized_pnl(self) -> float:
+        return self.realised_pnl
+
+    @property
+    def unrealized_pnl(self) -> float:
+        return self.unrealised_pnl
+
     def to_dict(self) -> Dict[str, Any]:
         return {k: round(v, 4) if isinstance(v, float) else v for k, v in asdict(self).items()}
 
@@ -678,6 +686,11 @@ class Gauntlet:
         """Cash + market value of all open positions."""
         positions_value = sum(p.market_value for p in self.positions.values())
         return self.cash + positions_value
+
+    @property
+    def equity(self) -> float:
+        """Alias for total_equity."""
+        return self.total_equity
 
     @property
     def metrics(self) -> PortfolioMetrics:

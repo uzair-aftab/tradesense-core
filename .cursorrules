@@ -18,3 +18,9 @@
 # 3. Strategy & Signal Protocol
 - In any BaseStrategy implementation or ensemble, always resolve reference price: price = float(df["Close"].iloc[current_idx]) before computing percentage-based target/stop levels to avoid NameError.
 - Never block the UI with full-page st.rerun() loops. Always use @st.fragment(run_every="2s").
+
+# 4. Session Telemetry & Timed Arming Protocol
+- When arming bot for timed sessions, always write streaming tick-by-tick records to data/bot_sessions/ in JSONL format.
+- Every tick snapshot must include: market micro-context, technical indicators (EMA, BB, RSI, ATR, VWAP), AI predictions, sub-strategy voting breakdown, order execution details, and portfolio equity.
+- On timer expiration or disarm, always finalize with _summary.json and executive Markdown report.
+

@@ -1,7 +1,7 @@
 # TradeSense Institutional System — Master AI Agent Operating Manual (`AGENT.md`)
 
 > **Target Audience**: Autonomous Agentic Coding AIs (Google Antigravity, Anthropic Claude Code, Cursor, Cline, Devin, SWE-bench) and Quantitative Engineers.
-> **Current Version**: `v2.1.1-institutional`  
+> **Current Version**: `v2.2.0-institutional`  
 > **Platform**: Windows / Python 3.12+ (Virtualenv: `c:\Python Virtual Environments\Personal Projects\TradeSense`)  
 > **Repository Path**: `c:\Python Virtual Environments\Personal Projects\Trading`  
 > **Hardware Acceleration**: NVIDIA GeForce RTX 4070 Laptop GPU (CUDA 12.4 / PyTorch 2.6.0)
@@ -102,6 +102,11 @@ TradeSense is an institutional-grade algorithmic trading, probabilistic machine 
 10. **Signal Target/Stop Price Resolution**:
     - Any strategy or meta-ensemble generating dynamic target or stop orders must always resolve the reference price from the active dataframe (`price = float(df["Close"].iloc[current_idx])`) before evaluating fallback percentages to prevent `NameError` crashes.
 
+11. **Session Lifecycle & High-Density Telemetry Protocol**:
+    - Timed bot sessions must enforce user-defined duration limits (`session_end_time = start + timedelta(minutes=duration)`), automatically disarming the bot and closing active files upon expiration.
+    - Every tick during an armed session must stream a complete, self-contained JSON record to `data/bot_sessions/<session_id>.jsonl` containing market micro-state (price, bid, ask, spread, volume, whale flag), technical indicators (EMA, BB, RSI, ATR, VWAP), AI forecasts (P10/P50/P90), sub-strategy voting breakdown, order execution details, and portfolio equity.
+    - Upon session completion or disarm, the session must automatically generate a machine-readable `_summary.json` and an executive `_report.md` debrief for post-trade AI learning and strategy optimization.
+
 ---
 
 ## 3. Environment & Key Commands
@@ -112,7 +117,7 @@ TradeSense is an institutional-grade algorithmic trading, probabilistic machine 
 
 ### Essential Commands
 ```powershell
-# Run full unit test suite (32 tests)
+# Run full unit test suite (34 tests)
 & "C:\Python Virtual Environments\Personal Projects\TradeSense\Scripts\python.exe" -m pytest tests/ -v
 
 # Run targeted test file

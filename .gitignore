@@ -75,12 +75,13 @@ htmlcov/
 *.key
 secrets/
 
-# -----------------
-# Data & Cache
-# -----------------
 data/cache.db
 data/*.db
 data/*.json
+data/bot_sessions/*.jsonl
+data/bot_sessions/*.json
+data/bot_sessions/*.md
+!data/bot_sessions/.gitkeep
 *.sqlite3
 *.db
 cache/

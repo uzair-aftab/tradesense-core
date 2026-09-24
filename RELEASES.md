@@ -4,6 +4,44 @@ This document records the state of the TradeSense project across major releases,
 
 ---
 
+## Release `v2.2.0` — Configurable Timed Bot Sessions & AI Post-Trade Telemetry Diagnostics
+
+- **Date**: 2026-09-24
+- **Branch**: `overhaul/tradesense-best`
+- **Scope**: Timed Bot Arming, Tick-by-Tick JSONL Session Logging, and AI Post-Trade Optimization Studio
+
+### Project State
+Introduces full lifecycle session tracking for algorithmic bot execution. Users can arm the Sniper Bot for configurable timeslots (15m, 20m, 30m, 60m, custom, or continuous), during which every microstructural market tick, technical indicator snapshot, AI forecast, sub-strategy consensus vote, order execution, and portfolio mark-to-market equity is streamed to a dedicated JSON Lines (`.jsonl`) file. Upon timer expiration, the bot automatically disarms, finalizes execution, and generates executive Markdown reports and machine-readable JSON summaries ready for future AI learning and post-trade performance enhancement.
+
+### Key Features Added
+1. **Configurable Timed Arming & Auto-Disarm Engine (`src/models/bot.py`)**:
+   - `AutonomousSniperBot.arm(duration_minutes=...)` supports configurable execution slots with automated expiration checking on every tick.
+   - Automatically disarms, closes active files, and logs session completion when the target time is reached.
+   - Real-time countdown timer (`MM:SS left`) with progress bar in the cockpit top ribbon.
+2. **High-Density JSONL Telemetry & Session Logger (`src/models/session_logger.py`)**:
+   - Dedicated directory `data/bot_sessions/` with files named `session_YYYYMMDD_HHMMSS_<SYMBOL>_<DURATION>m.jsonl`.
+   - Captures comprehensive market context (price, bid, ask, spread bps, volume, whale Z-score), indicators (EMA 9/20/50, BB, RSI, ATR, VWAP), predictions (P10/P50/P90, direction, confidence), sub-strategy voting breakdown, order execution details, and portfolio equity.
+   - Generates companion `_summary.json` and human-readable executive `_report.md` debrief files.
+3. **Sub-Strategy Consensus Observability (`src/models/strategies.py`)**:
+   - `EnsembleAlpha` tracks `last_sub_signals`, `last_buy_votes`, and `last_sell_votes` so the session logger records the exact individual votes of every underlying quant strategy.
+4. **Session Archives & AI Telemetry Tab (`src/ui/app.py`)**:
+   - Added a 4th cockpit tab: "📂 Session Archives & AI Telemetry".
+   - Displays all historical completed sessions with Net PnL, Win Rate %, Total Trades, and Max Drawdown in a clean table.
+   - Interactive report viewer displaying executive markdown reports and generating actionable AI post-trade diagnostic prompts.
+   - Direct download buttons for `.jsonl` tick logs and summary `.json`.
+5. **Comprehensive Unit Tests (`tests/test_session_logger.py`)**:
+   - Tested timed arming, automatic expiration, JSONL record schema integrity, and `SessionLogManager` analysis generation. Test suite expanded to 34 passing tests.
+
+### Pros & Cons
+- **Pros**:
+  - Full transparency: 100% of decisions, inputs, and market states are recorded without loss.
+  - Zero risk of unattended runaways: timed slots guarantee the bot disarms after the user's chosen duration.
+  - Rich diagnostics ready for future AI-driven strategy tuning and hyperparameter optimization.
+- **Cons & Trade-offs**:
+  - Long high-frequency sessions (e.g. several hours of 1-second ticks) produce detailed multi-megabyte `.jsonl` files (mitigated by Git ignoring large `.jsonl` outputs while preserving summaries).
+
+---
+
 ## Release `v2.1.1` — EnsembleAlpha Bugfix, Category Axis Monolith Collapse Fix & Volume Calibration
 
 - **Date**: 2026-09-24

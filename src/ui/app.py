@@ -36,6 +36,7 @@ from src.data.live_feed import LiveMarketFeed, MarketTick, StreamMode
 from src.data.watchlists import AssetCategory, WatchlistManager
 from src.models.ai_engine import AIEngine, QuantilePrediction
 from src.models.bot import AutonomousSniperBot, BotConfig, BotState
+from src.models.session_logger import SessionLogManager, BotSessionLogger
 from src.models.strategies import (
     DeepQuantileSniper,
     EnsembleAlpha,
@@ -460,14 +461,34 @@ def _render_top_ribbon(tick: MarketTick, metrics: Dict[str, Any]) -> None:
 
     with col_bot:
         if bot_armed:
-            st.markdown('<p style="color: #10b981; font-weight: 700; margin-bottom: 2px;"><span class="pulse-armed"></span> 🤖 BOT ARMED</p>', unsafe_allow_html=True)
+            status = bot.get_session_status()
+            if status["is_timed"]:
+                st.markdown(
+                    f'<p style="color: #10b981; font-weight: 700; margin-bottom: 2px;"><span class="pulse-armed"></span> 🤖 ARMED ({status["remaining_formatted"]} left)</p>',
+                    unsafe_allow_html=True,
+                )
+                st.progress(min(1.0, max(0.0, status["progress_pct"] / 100.0)))
+            else:
+                st.markdown(
+                    '<p style="color: #10b981; font-weight: 700; margin-bottom: 2px;"><span class="pulse-armed"></span> 🤖 BOT ARMED</p>',
+                    unsafe_allow_html=True,
+                )
             if st.button("🛑 DISARM BOT", key="disarm_btn", use_container_width=True):
-                bot.disarm()
+                bot.disarm(reason="MANUAL_STOP")
                 st.rerun()
         else:
             st.markdown('<p style="color: #94a3b8; font-weight: 600; margin-bottom: 2px;">⚪ BOT STANDBY</p>', unsafe_allow_html=True)
-            if st.button("🚀 ARM BOT", key="arm_btn", use_container_width=True):
-                bot.arm()
+            timeslot_choice = st.selectbox(
+                "Timed Slot",
+                ["15 mins", "20 mins", "30 mins", "60 mins", "5 mins", "Continuous"],
+                index=0,
+                key="timeslot_select",
+                label_visibility="collapsed",
+            )
+            dur_mins = float(timeslot_choice.replace("mins", "").strip()) if "mins" in timeslot_choice else None
+            btn_label = f"🚀 ARM ({timeslot_choice})" if dur_mins else "🚀 ARM (Continuous)"
+            if st.button(btn_label, key="arm_btn", use_container_width=True):
+                bot.arm(duration_minutes=dur_mins)
                 st.rerun()
 
 
@@ -790,8 +811,28 @@ def _render_live_streaming_fragment() -> None:
 
         st.caption(f"Ticks Processed: {metrics['Ticks Processed']} | Stream: {feed.mode.value}")
 
-    # 4. Live Microstructure Terminal & Open Positions
-    tab_term, tab_pos, tab_hist = st.tabs(["📟 Microstructure Execution Log", "📊 Active Positions", "📜 Closed Trades"])
+    # 4. Live Microstructure Terminal, Open Positions, and Session Archives
+    if bot.last_completed_session_summary:
+        s = bot.last_completed_session_summary
+        pnl_val = s.get("net_pnl", 0.0)
+        pnl_color = "#10b981" if pnl_val >= 0 else "#ef4444"
+        st.markdown(
+            f"""
+            <div style="background: rgba(15, 23, 42, 0.85); border-left: 4px solid {pnl_color}; border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <strong>📋 Last Session Completed ({s.get('session_id', '')})</strong>:
+                    Net PnL: <span style="color: {pnl_color}; font-weight: 700;">${pnl_val:,.2f} ({s.get('net_return_pct', 0):+.2f}%)</span> |
+                    Trades: <strong>{s.get('total_trades', 0)}</strong> | Win Rate: <strong>{s.get('win_rate_pct', 0):.1f}%</strong> |
+                    Saved to: <code>{Path(s.get('jsonl_file', '')).name}</code>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    tab_term, tab_pos, tab_hist, tab_sessions = st.tabs(
+        ["📟 Microstructure Execution Log", "📊 Active Positions", "📜 Closed Trades", "📂 Session Archives & AI Telemetry"]
+    )
 
     with tab_term:
         logs = bot.get_recent_logs(20)
@@ -840,6 +881,88 @@ def _render_live_streaming_fragment() -> None:
             )
         else:
             st.caption("No completed trades recorded in this session.")
+
+    with tab_sessions:
+        st.markdown("##### 📂 Timed Bot Sessions & AI Deep-Dive Diagnostic Archives")
+        st.caption(
+            "Every timed session records all market ticks, indicator snapshots, AI forecasts, "
+            "sub-strategy voting consensus, order slippage, and portfolio equity to dedicated JSONL files."
+        )
+
+        cur_status = bot.get_session_status()
+        if cur_status["active"]:
+            file_name = Path(cur_status["file_path"]).name if cur_status["file_path"] else "N/A"
+            st.info(
+                f"🔴 **Active Session Running**: `{cur_status['session_id']}` | "
+                f"Remaining: **{cur_status['remaining_formatted']}** | "
+                f"Ticks Logged: **{cur_status['ticks_processed']}** | "
+                f"Active File: `{file_name}`"
+            )
+
+        sessions = SessionLogManager.list_sessions()
+        if sessions:
+            sess_rows = []
+            for s in sessions:
+                sess_rows.append({
+                    "Session ID": s.get("session_id"),
+                    "Symbol": s.get("symbol"),
+                    "Start (UTC)": s.get("start_time", "")[:19].replace("T", " "),
+                    "Duration": f"{s.get('actual_duration_minutes', 0):.1f}m / {s.get('target_duration_minutes', 0):.0f}m",
+                    "Net PnL": f"${s.get('net_pnl', 0):,.2f}",
+                    "Return %": f"{s.get('net_return_pct', 0):+.2f}%",
+                    "Trades": s.get("total_trades", 0),
+                    "Win Rate": f"{s.get('win_rate_pct', 0):.1f}%",
+                    "Max DD": f"{s.get('max_drawdown_pct', 0):.2f}%",
+                    "Exit Reason": s.get("disarm_reason", ""),
+                })
+            st.dataframe(pd.DataFrame(sess_rows), use_container_width=True, hide_index=True)
+
+            selected_sess = st.selectbox(
+                "Select Session for AI Deep-Dive & Diagnostics",
+                [s["session_id"] for s in sessions],
+                index=0,
+                key="select_session_archive",
+            )
+
+            col_rep, col_prompt = st.columns([1.1, 1])
+            with col_rep:
+                st.markdown("**📜 Executive Session Report**")
+                rep_summary = SessionLogManager.load_session_summary(selected_sess)
+                if rep_summary and "report_file" in rep_summary and Path(rep_summary["report_file"]).exists():
+                    with open(rep_summary["report_file"], "r", encoding="utf-8") as rf:
+                        st.markdown(rf.read())
+                else:
+                    st.json(rep_summary or {})
+
+            with col_prompt:
+                st.markdown("**🧠 AI Post-Trade Learning Diagnostic Prompt**")
+                st.caption("Copy this prompt into any AI agent conversation for deep algorithmic trade attribution and strategy improvement:")
+                prompt_text = SessionLogManager.generate_ai_analysis_prompt(selected_sess)
+                st.code(prompt_text, language="markdown")
+
+                # Direct download options
+                if rep_summary:
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if "jsonl_file" in rep_summary and Path(rep_summary["jsonl_file"]).exists():
+                            with open(rep_summary["jsonl_file"], "r", encoding="utf-8") as jf:
+                                st.download_button(
+                                    "📥 Download JSONL Stream",
+                                    data=jf.read(),
+                                    file_name=Path(rep_summary["jsonl_file"]).name,
+                                    mime="application/x-ndjson",
+                                    use_container_width=True,
+                                )
+                    with c2:
+                        st.download_button(
+                            "📥 Download Summary JSON",
+                            data=json.dumps(rep_summary, indent=2),
+                            file_name=f"{selected_sess}_summary.json",
+                            mime="application/json",
+                            use_container_width=True,
+                        )
+        else:
+            st.caption("No completed timed sessions recorded yet. Arm the bot with a 15m or 20m timeslot to begin recording.")
 
 
 # ---------------------------------------------------------------------------

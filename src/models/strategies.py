@@ -291,9 +291,12 @@ class EnsembleAlpha(BaseStrategy):
     ) -> StrategySignal:
         ticker = "ASSET"
         signals = [s.generate_signal(df, current_idx, prediction) for s in self.strategies]
+        self.last_sub_signals = signals
 
         buy_votes = sum(s.strength for s in signals if s.signal_type == SignalType.BUY)
         sell_votes = sum(s.strength for s in signals if s.signal_type == SignalType.SELL)
+        self.last_buy_votes = buy_votes
+        self.last_sell_votes = sell_votes
 
         min_threshold = 0.65 if prediction is None else 1.0
         price = float(df["Close"].iloc[current_idx]) if not df.empty else 100.0
