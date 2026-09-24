@@ -171,3 +171,68 @@ def test_live_feed_candle_aggregation():
     prev_close = feed.streaming_df["Close"].iloc[-2]
     new_open = feed.streaming_df["Open"].iloc[-1]
     assert new_open == pytest.approx(prev_close, rel=1e-5)
+
+
+def test_ensemble_alpha_no_name_error():
+    """Verify EnsembleAlpha generates signals without NameError and computes valid target/stop prices."""
+    from src.models.strategies import EnsembleAlpha
+    from src.models.ai_engine import QuantilePrediction
+
+    df = _create_sample_df(60, start_price=80_000.0)
+    df["Whale_Z"] = 3.5
+    df["Whale_Flag"] = 1
+    df["VWAP"] = 79_000.0
+
+    ensemble = EnsembleAlpha()
+    pred = QuantilePrediction(
+        p10=78_000.0,
+        p50=82_000.0,
+        p90=85_000.0,
+        confidence=0.88,
+        current_price=80_000.0,
+    )
+
+    signal = ensemble.generate_signal(df=df, current_idx=-1, prediction=pred)
+    assert signal is not None
+    assert signal.signal_type in (SignalType.BUY, SignalType.HOLD, SignalType.SELL)
+    if signal.signal_type == SignalType.BUY:
+        assert signal.target_price is not None
+        assert signal.stop_price is not None
+        assert signal.target_price > 0
+        assert signal.stop_price > 0
+        assert signal.target_price > signal.stop_price
+
+
+def test_live_feed_mode_switch():
+    """Verify switching LiveMarketFeed mode re-initializes stream baseline cleanly."""
+    base_df = _create_sample_df(50, start_price=150.0)
+    feed = LiveMarketFeed(ticker="SOL-USD", mode=StreamMode.HISTORICAL_REPLAY, base_df=base_df)
+    assert feed.mode == StreamMode.HISTORICAL_REPLAY
+    assert len(feed.streaming_df) > 0
+
+    # Switch to SYNTHETIC_MICROSTRUCTURE
+    feed.mode = StreamMode.SYNTHETIC_MICROSTRUCTURE
+    assert feed.mode == StreamMode.SYNTHETIC_MICROSTRUCTURE
+    assert len(feed.streaming_df) == 60
+    # Current price should remain continuous near 150
+    assert feed.current_price > 0
+
+
+def test_chart_time_label_uniqueness():
+    """Verify _format_chart_time_labels guarantees category uniqueness for daily and intraday bars."""
+    from src.ui.app import _format_chart_time_labels
+
+    # 1. Test 50 daily bars (all 00:00:00 midnight)
+    daily_idx = pd.date_range("2026-01-01", periods=50, freq="1D")
+    labels = _format_chart_time_labels(daily_idx)
+    assert len(labels) == 50
+    assert len(set(labels)) == 50  # Must all be completely unique!
+    assert "00:00:00" not in labels[0]  # Should format as month-day, e.g. 'Jan 01'
+
+    # 2. Test duplicate timestamps
+    dup_idx = pd.to_datetime(["2026-03-24 14:00:00", "2026-03-24 14:00:00", "2026-03-24 14:00:01"])
+    dup_labels = _format_chart_time_labels(dup_idx)
+    assert len(dup_labels) == 3
+    assert len(set(dup_labels)) == 3
+    assert "#2" in dup_labels[1]
+

@@ -296,6 +296,7 @@ class EnsembleAlpha(BaseStrategy):
         sell_votes = sum(s.strength for s in signals if s.signal_type == SignalType.SELL)
 
         min_threshold = 0.65 if prediction is None else 1.0
+        price = float(df["Close"].iloc[current_idx]) if not df.empty else 100.0
 
         if buy_votes > sell_votes and buy_votes >= min_threshold:
             reasons = [f"{s.strategy_name}: {s.reason}" for s in signals if s.signal_type == SignalType.BUY]

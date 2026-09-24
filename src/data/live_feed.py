@@ -94,7 +94,7 @@ class LiveMarketFeed:
         ticks_per_bar: int = 5,
     ):
         self.ticker = ticker
-        self.mode = mode
+        self._mode = mode
         self.tick_interval_sec = tick_interval_sec
         self.ticks_per_bar = max(2, ticks_per_bar)
 
@@ -105,7 +105,7 @@ class LiveMarketFeed:
         if self.base_df is not None and len(self.base_df) > 30:
             self._replay_idx = max(0, len(self.base_df) - 30)
 
-        # Microstructure state
+        # Microstructure state: anchor current price to base_df latest close if available
         self._current_price = 80_000.0 if "BTC" in ticker else 150.0
         if self.base_df is not None and not self.base_df.empty:
             self._current_price = float(self.base_df["Close"].iloc[-1])
@@ -116,7 +116,11 @@ class LiveMarketFeed:
         self._ticks_in_current_bar = 0
 
         # Build initial streaming dataframe
-        if self.base_df is not None and not self.base_df.empty:
+        self._init_streaming_data()
+
+    def _init_streaming_data(self) -> None:
+        """Initialize or reset streaming data according to stream mode."""
+        if self._mode == StreamMode.HISTORICAL_REPLAY and self.base_df is not None and not self.base_df.empty:
             self._streaming_df = self.base_df.iloc[: self._replay_idx + 1].copy()
         else:
             self._streaming_df = self._generate_initial_baseline()
@@ -127,19 +131,24 @@ class LiveMarketFeed:
         self._refresh_indicators()
 
     def _generate_initial_baseline(self) -> pd.DataFrame:
-        """Generate 60 continuous, realistic baseline bars."""
+        """Generate 60 continuous, realistic baseline bars ending at current timestamp."""
         periods = 60
         now = pd.Timestamp.now(timezone.utc)
-        dates = [now - pd.Timedelta(seconds=(periods - i) * 15) for i in range(periods)]
+        dates = [now - pd.Timedelta(seconds=(periods - 1 - i) * 15) for i in range(periods)]
 
         p0 = self._current_price
-        shocks = np.random.normal(0, 0.001, size=periods)
+        shocks = np.random.normal(0, 0.0008, size=periods)
         closes = p0 * np.exp(np.cumsum(shocks))
 
-        opens = [closes[0] * 0.999] + list(closes[:-1])
-        highs = [max(o, c) * (1.0 + abs(np.random.normal(0, 0.0008))) for o, c in zip(opens, closes)]
-        lows = [min(o, c) * (1.0 - abs(np.random.normal(0, 0.0008))) for o, c in zip(opens, closes)]
-        volumes = np.random.uniform(5000, 25000, size=periods)
+        opens = [closes[0] * 0.9995] + list(closes[:-1])
+        highs = [max(o, c) * (1.0 + abs(np.random.normal(0, 0.0005))) for o, c in zip(opens, closes)]
+        lows = [min(o, c) * (1.0 - abs(np.random.normal(0, 0.0005))) for o, c in zip(opens, closes)]
+
+        is_crypto = any(c in self.ticker.upper() for c in ["BTC", "ETH", "SOL", "DOGE"])
+        if is_crypto:
+            volumes = np.random.uniform(2.0, 18.0, size=periods)
+        else:
+            volumes = np.random.uniform(500.0, 3500.0, size=periods)
 
         df = pd.DataFrame(
             {
@@ -148,13 +157,23 @@ class LiveMarketFeed:
                 "Low": lows,
                 "Close": closes,
                 "Volume": volumes,
-                "Whale_Flag": [1 if i % 12 == 0 else 0 for i in range(periods)],
-                "Whale_Z": [3.2 if i % 12 == 0 else 0.2 for i in range(periods)],
+                "Whale_Flag": [1 if i % 14 == 0 else 0 for i in range(periods)],
+                "Whale_Z": [3.2 if i % 14 == 0 else 0.2 for i in range(periods)],
             },
             index=dates,
         )
         self._current_price = float(closes[-1])
         return df
+
+    @property
+    def mode(self) -> StreamMode:
+        return self._mode
+
+    @mode.setter
+    def mode(self, new_mode: StreamMode) -> None:
+        if self._mode != new_mode:
+            self._mode = new_mode
+            self._init_streaming_data()
 
     @property
     def current_price(self) -> float:
@@ -215,14 +234,15 @@ class LiveMarketFeed:
         whale_z = 0.0
         jump = 0.0
 
+        is_crypto = any(c in self.ticker.upper() for c in ["BTC", "ETH", "SOL", "DOGE"])
         if is_whale:
             jump_dir = 1 if random.random() < 0.55 else -1
             # Realistic institutional jump: 15 to 35 basis points
             jump = jump_dir * np.random.uniform(0.0015, 0.0035)
             whale_z = float(np.random.uniform(2.5, 4.8))
-            volume = float(np.random.uniform(25_000, 100_000))
+            volume = float(np.random.uniform(5.0, 35.0)) if is_crypto else float(np.random.uniform(5_000, 25_000))
         else:
-            volume = float(np.random.uniform(500, 4_000))
+            volume = float(np.random.uniform(0.05, 1.8)) if is_crypto else float(np.random.uniform(100, 1_500))
 
         ret = drift + self._volatility * shock + jump
         self._current_price = max(1.0, self._current_price * (1.0 + ret))

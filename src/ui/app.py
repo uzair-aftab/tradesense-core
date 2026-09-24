@@ -474,6 +474,42 @@ def _render_top_ribbon(tick: MarketTick, metrics: Dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 #  Fragment: Real-Time Live Streaming Chart & Execution Cockpit
 # ---------------------------------------------------------------------------
+def _format_chart_time_labels(index: pd.Index) -> List[str]:
+    """
+    Format candlestick x-axis labels with guaranteed category uniqueness.
+    Prevents Plotly from collapsing bars sharing identical string labels into single monolith bins.
+    """
+    if len(index) == 0:
+        return []
+
+    is_daily = False
+    try:
+        is_daily = all(
+            hasattr(ts, "hour") and ts.hour == 0 and ts.minute == 0 and ts.second == 0
+            for ts in index
+        )
+    except Exception:
+        pass
+
+    labels = []
+    seen: Dict[str, int] = {}
+    for ts in index:
+        if not hasattr(ts, "strftime"):
+            lbl = str(ts)
+        elif is_daily:
+            lbl = ts.strftime("%b %d")
+        else:
+            lbl = ts.strftime("%H:%M:%S")
+
+        if lbl in seen:
+            seen[lbl] += 1
+            lbl = f"{lbl} #{seen[lbl]}"
+        else:
+            seen[lbl] = 1
+        labels.append(lbl)
+    return labels
+
+
 @st.fragment(run_every="2s")
 def _render_live_streaming_fragment() -> None:
     """
@@ -514,7 +550,7 @@ def _render_live_streaming_fragment() -> None:
             return
 
         display_df = streaming_df.tail(60).copy()
-        time_labels = [ts.strftime("%H:%M:%S") if hasattr(ts, "strftime") else str(ts) for ts in display_df.index]
+        time_labels = _format_chart_time_labels(display_df.index)
 
         fig = make_subplots(
             rows=2,
