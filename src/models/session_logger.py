@@ -140,10 +140,14 @@ class BotSessionLogger:
                 "BB_Lower",
                 "RSI_14",
                 "ATR_14",
+                "ADX_14",
+                "Plus_DI",
+                "Minus_DI",
                 "VWAP",
                 "Whale_Flag",
                 "Whale_Z",
             ]:
+
                 if k in df_indicators:
                     val = df_indicators[k]
                     indicators[k] = round(float(val), 4) if val is not None else None

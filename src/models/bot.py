@@ -92,10 +92,12 @@ class AutonomousSniperBot:
         strategy: Optional[BaseStrategy] = None,
         config: Optional[BotConfig] = None,
         persist_portfolio: bool = False,
+        ai_engine: Optional[Any] = None,
     ):
         self.feed = feed
         self.config = config or BotConfig(symbol=feed.ticker)
         self.strategy = strategy or EnsembleAlpha()
+        self.ai_engine = ai_engine
         self.state = BotState.DISARMED
 
         # Portfolio and order execution using Gauntlet
@@ -104,10 +106,15 @@ class AutonomousSniperBot:
             persist=persist_portfolio,
         )
 
-        # Telemetry & logs
+        # Telemetry, logs & risk circuit breakers
         self._logs: deque[BotLogEntry] = deque(maxlen=500)
         self._cooldown_counter = 0
         self._total_ticks_processed = 0
+        self._consecutive_losses: int = 0
+        self._circuit_breaker_ticks: int = 0
+        self._processed_fills_count: int = 0
+        self.last_wealthsimple_signal: Optional[Dict[str, Any]] = None
+
 
         # Session & Timed Execution Management
         self.session_logger: Optional[BotSessionLogger] = None
@@ -119,6 +126,7 @@ class AutonomousSniperBot:
         self._last_signal_type: str = "HOLD"
         self._last_signal_strength: float = 0.0
         self._last_signal_reason: str = "Standby"
+
 
         self.log(
             "INFO",
@@ -296,12 +304,11 @@ class AutonomousSniperBot:
         current_price = tick.price
 
         # 3. Update open positions via Gauntlet mark_to_market
-        prev_fills_len = len(self.gauntlet.fills)
         self.gauntlet.mark_to_market({self.config.symbol: current_price})
 
-        # Check if any auto-close orders executed during mark_to_market
-        if len(self.gauntlet.fills) > prev_fills_len:
-            for fill in self.gauntlet.fills[prev_fills_len:]:
+        # Check if any auto-close or exit orders executed
+        if len(self.gauntlet.fills) > self._processed_fills_count:
+            for fill in self.gauntlet.fills[self._processed_fills_count:]:
                 if fill.side == Side.SELL:
                     event = fill.exit_reason or "AUTO_EXIT"
                     if self.session_logger:
@@ -322,6 +329,23 @@ class AutonomousSniperBot:
                         pnl=fill.pnl,
                     )
 
+                    # Consecutive Loss Circuit Breaker
+                    if "STOP_LOSS" in event or fill.pnl < 0:
+                        self._consecutive_losses += 1
+                        if self._consecutive_losses >= 2:
+                            self._circuit_breaker_ticks = 60
+                            self.log(
+                                "CIRCUIT_BREAKER",
+                                "🛑 Circuit Breaker Triggered (2 consecutive stop-outs)! Halting execution for 60 ticks (~2 min).",
+                                price=fill.fill_price,
+                                pnl=fill.pnl,
+                            )
+                    elif "TAKE_PROFIT" in event or fill.pnl > 0:
+                        self._consecutive_losses = 0
+
+            self._processed_fills_count = len(self.gauntlet.fills)
+
+
         # 4. Check Whale Flow
         if tick.is_whale:
             self.log(
@@ -330,23 +354,56 @@ class AutonomousSniperBot:
                 price=current_price,
             )
 
-        # 5. Strategy Evaluation (if cooldown passed and positions available)
+        # 5. Circuit Breaker Countdown & Cooldowns
+        if self._circuit_breaker_ticks > 0:
+            self._circuit_breaker_ticks -= 1
+            if self._circuit_breaker_ticks % 15 == 0 and self._circuit_breaker_ticks > 0:
+                self.log(
+                    "CIRCUIT_BREAKER",
+                    f"🛡️ Circuit Breaker Active: {self._circuit_breaker_ticks} ticks remaining before trading resumes.",
+                    price=current_price,
+                )
+
         if self._cooldown_counter > 0:
             self._cooldown_counter -= 1
 
+        # 6. Auto-Generate Quantile Prediction if not passed
+        if prediction is None:
+            if self.ai_engine is not None and getattr(self.ai_engine, "_trained", False):
+                try:
+                    prediction = self.ai_engine.predict(self.feed.streaming_df)
+                except Exception:
+                    pass
+            if prediction is None and len(self.feed.streaming_df) >= 5:
+                df = self.feed.streaming_df
+                closes = df["Close"]
+                atr = float(df.get("ATR_14", pd.Series(current_price * 0.01, index=df.index)).iloc[-1])
+                p50 = float(df.get("EMA_20", pd.Series(current_price, index=df.index)).iloc[-1])
+                prediction = QuantilePrediction(
+                    p10=round(p50 - 1.645 * atr, 4),
+                    p50=round(p50, 4),
+                    p90=round(p50 + 1.645 * atr, 4),
+                    confidence=0.80,
+                    current_price=current_price,
+                )
+
+        # 7. Strategy Evaluation (if unblocked, cooldown passed, and positions available)
         if (
             self.state == BotState.ARMED
+            and self._circuit_breaker_ticks == 0
             and self._cooldown_counter == 0
             and len(self.gauntlet.positions) < self.config.max_open_positions
         ):
             self._evaluate_signals_and_execute(current_price, prediction)
         elif self.state == BotState.ARMED and self._total_ticks_processed % 8 == 0:
             open_count = len(self.gauntlet.positions)
+            cb_msg = f" (Circuit Breaker: {self._circuit_breaker_ticks} ticks)" if self._circuit_breaker_ticks > 0 else ""
             self.log(
                 "INFO",
-                f"🤖 Sniper Bot scanning order flow ({open_count}/{self.config.max_open_positions} positions open)",
+                f"🤖 Sniper Bot scanning order flow ({open_count}/{self.config.max_open_positions} positions open){cb_msg}",
                 price=current_price,
             )
+
 
         # 6. Stream High-Density Tick Snapshot to Active Session File
         if self.session_logger is not None:
@@ -365,13 +422,21 @@ class AutonomousSniperBot:
                         "reason": s.reason,
                     })
 
+            regime_val = "BULL_TREND"
+            if hasattr(self.strategy, "last_regime_context") and self.strategy.last_regime_context:
+                regime_val = self.strategy.last_regime_context.regime.value
+
             decision_snapshot = {
                 "strategy_name": self.strategy.name,
                 "consensus_signal": self._last_signal_type,
                 "consensus_strength": self._last_signal_strength,
                 "consensus_reason": self._last_signal_reason,
+                "regime": regime_val,
+                "circuit_breaker_ticks": self._circuit_breaker_ticks,
+                "consecutive_losses": self._consecutive_losses,
                 "sub_strategy_signals": sub_signals,
             }
+
 
             positions_snapshot = []
             for sym, pos in self.gauntlet.positions.items():
@@ -429,6 +494,9 @@ class AutonomousSniperBot:
         self._last_signal_strength = float(signal.strength)
         self._last_signal_reason = signal.reason
 
+        if self._circuit_breaker_ticks > 0:
+            return
+
         if signal.signal_type == SignalType.BUY and signal.strength >= self.config.min_confidence:
             stop_loss = signal.stop_price or (current_price * 0.98)
             take_profit = signal.target_price or (current_price * 1.04)
@@ -441,6 +509,16 @@ class AutonomousSniperBot:
 
             rrr = reward / risk
             if rrr < self.config.min_rrr:
+                return
+
+            reward_pct = (reward / max(0.01, current_price)) * 100.0
+            # Wealthsimple fee hurdle filter: minimum target must be at least 1.0% to beat spreads
+            if reward_pct < 1.0:
+                self.log(
+                    "INFO",
+                    f"Order skipped: Target distance too tight for fee hurdle (+{reward_pct:.2f}% < 1.0%)",
+                    price=current_price,
+                )
                 return
 
             # Fractional position sizing based on risk capital
@@ -466,6 +544,7 @@ class AutonomousSniperBot:
 
             trailing_pct = self.config.trailing_stop_pct if self.config.trailing_stop_enabled else None
 
+
             try:
                 order = TradeOrder(
                     ticker=self.config.symbol,
@@ -483,6 +562,9 @@ class AutonomousSniperBot:
                 if self.session_logger:
                     self.session_logger.record_entry(fill)
 
+                self._processed_fills_count = len(self.gauntlet.fills)
+
+
                 self._last_execution_event = {
                     "action": "ORDER_BUY",
                     "side": "BUY",
@@ -492,6 +574,26 @@ class AutonomousSniperBot:
                     "take_profit": take_profit,
                     "stop_loss": stop_loss,
                     "rrr": rrr,
+                }
+
+                ws_ticker = "BTCC.TO" if "BTC" in self.config.symbol else ("ETHX.TO" if "ETH" in self.config.symbol else self.config.symbol)
+                regime_str = "BULL_TREND"
+                if hasattr(self.strategy, "last_regime_context") and self.strategy.last_regime_context:
+                    regime_str = self.strategy.last_regime_context.regime.value
+
+                self.last_wealthsimple_signal = {
+                    "symbol": self.config.symbol,
+                    "ws_ticker": ws_ticker,
+                    "action": "BUY",
+                    "entry_price": round(fill.fill_price, 2),
+                    "take_profit": round(take_profit, 2),
+                    "stop_loss": round(stop_loss, 2),
+                    "rrr": round(rrr, 2),
+                    "reward_pct": round(reward_pct, 2),
+                    "risk_pct": round(((current_price - stop_loss) / max(0.01, current_price)) * 100.0, 2),
+                    "confidence": round(float(signal.strength) * 100.0, 1),
+                    "regime": regime_str,
+                    "timestamp": datetime.now(timezone.utc).strftime("%H:%M:%S UTC"),
                 }
 
                 self._cooldown_counter = self.config.cooldown_ticks
@@ -509,9 +611,17 @@ class AutonomousSniperBot:
                         "strategy": self.strategy.name,
                     },
                 )
+
             except Exception as e:
                 self.log("ERROR", f"Execution error: {e}", price=current_price)
                 logger.error("Failed to execute buy order: %s", e)
+
+    @property
+    def current_regime(self) -> str:
+        """Return current market regime string from active strategy if available."""
+        if hasattr(self.strategy, "last_regime_context") and self.strategy.last_regime_context:
+            return self.strategy.last_regime_context.regime.value
+        return "BULL_TREND"
 
     def get_metrics(self) -> Dict[str, Any]:
         """Compute key portfolio performance metrics."""
@@ -531,6 +641,8 @@ class AutonomousSniperBot:
             "Max Drawdown %": round(m.max_drawdown_pct, 2),
             "State": self.state.value,
             "Ticks Processed": self._total_ticks_processed,
+            "Regime": self.current_regime,
+            "CircuitBreakerTicks": self._circuit_breaker_ticks,
         }
 
     def get_recent_logs(self, count: int = 50) -> List[Dict[str, Any]]:

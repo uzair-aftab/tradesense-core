@@ -165,6 +165,24 @@ st.markdown(
         font-size: 0.75rem;
         font-weight: 700;
     }
+    .chop-badge {
+        background: rgba(234, 179, 8, 0.2);
+        border: 1px solid #eab308;
+        color: #eab308;
+        padding: 3px 10px;
+        border-radius: 20px;
+        font-size: 0.75rem;
+        font-weight: 700;
+    }
+    .cash-badge {
+        background: rgba(239, 68, 68, 0.25);
+        border: 1px solid #ef4444;
+        color: #f87171;
+        padding: 3px 10px;
+        border-radius: 20px;
+        font-size: 0.75rem;
+        font-weight: 700;
+    }
 
     /* Sidebar aesthetics */
     section[data-testid="stSidebar"] {
@@ -238,6 +256,7 @@ def _init_state() -> None:
                 min_rrr=1.5,
             ),
             persist_portfolio=False,
+            ai_engine=st.session_state.engine,
         )
 
     if "prediction" not in st.session_state:
@@ -254,8 +273,9 @@ def _init_state() -> None:
         try:
             st.session_state.engine.load("latest")
             st.session_state.trained = True
-        except Exception:
-            pass
+            logger.info("Auto-loaded pre-trained AI Engine weights from models/hfp/latest")
+        except Exception as e:
+            logger.info("Could not load pre-trained AI Engine weights: %s", e)
 
 
 def _load_default_asset() -> None:
@@ -384,6 +404,7 @@ def _render_sidebar() -> None:
                 strategy=EnsembleAlpha(),
                 config=BotConfig(symbol=st.session_state.ticker, initial_balance=100_000.0),
                 persist_portfolio=False,
+                ai_engine=st.session_state.engine,
             )
             st.rerun()
 
@@ -401,6 +422,7 @@ def _reload_active_asset() -> None:
         strategy=EnsembleAlpha(),
         config=BotConfig(symbol=st.session_state.ticker, initial_balance=st.session_state.gauntlet.starting_capital),
         persist_portfolio=False,
+        ai_engine=st.session_state.engine,
     )
 
 
@@ -443,10 +465,20 @@ def _render_top_ribbon(tick: MarketTick, metrics: Dict[str, Any]) -> None:
             """,
             unsafe_allow_html=True,
         )
-        if tick.is_whale:
-            st.markdown(f'<span class="whale-badge">🐋 WHALE ORDER: {tick.volume:,.0f} (Z={tick.whale_z:.1f})</span>', unsafe_allow_html=True)
+        regime_str = metrics.get("Regime", bot.current_regime)
+        if regime_str == "BULL_TREND":
+            badge_html = '<span class="bull-badge">🟢 BULL TREND</span>'
+        elif regime_str == "BEAR_TREND":
+            badge_html = '<span class="cash-badge">🔴 BEAR TREND (CASH LOCK)</span>'
+        elif regime_str == "RANGING_CHOP":
+            badge_html = '<span class="chop-badge">🟡 RANGING CHOP</span>'
         else:
-            st.caption(f"Spread: ${tick.spread:.2f} | Bid: ${tick.bid:,.2f} | Ask: ${tick.ask:,.2f}")
+            badge_html = f'<span class="whale-badge">⚡ {regime_str}</span>'
+
+        if tick.is_whale:
+            st.markdown(f'{badge_html}&nbsp;<span class="whale-badge">🐋 WHALE (Z={tick.whale_z:.1f})</span>', unsafe_allow_html=True)
+        else:
+            st.markdown(f'{badge_html}&nbsp;<span style="font-size: 0.75rem; color: #94a3b8;">Spread: ${tick.spread:.2f}</span>', unsafe_allow_html=True)
 
     with col_m1:
         st.metric("Portfolio Value", f"${metrics['Portfolio Value']:,.2f}", f"{metrics['Total Return %']:+0.2f}%")
@@ -559,6 +591,13 @@ def _render_live_streaming_fragment() -> None:
     # 2. Render Top Ticker Ribbon
     metrics = bot.get_metrics()
     _render_top_ribbon(tick, metrics)
+
+    # Circuit Breaker Alert Banner if active
+    if bot._circuit_breaker_ticks > 0:
+        st.warning(
+            f"🛑 **Circuit Breaker Active**: Execution frozen for {bot._circuit_breaker_ticks} ticks "
+            f"(~{bot._circuit_breaker_ticks * 2}s) after 2 consecutive stop-outs to preserve capital."
+        )
 
     st.markdown("<hr style='margin: 8px 0; opacity: 0.15;'/>", unsafe_allow_html=True)
 
@@ -734,6 +773,55 @@ def _render_live_streaming_fragment() -> None:
                     </div>
                     <div style="margin-top: 8px; font-size: 0.85rem; color: #94a3b8;">
                         Target: <strong style="color: #10b981;">${pred.p90:,.2f}</strong> | Floor: <strong style="color: #ef4444;">${pred.p10:,.2f}</strong>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        # 📲 Wealthsimple Mobile Trade Copier Card (North York, Ontario Real-World Execution)
+        ws_sig = bot.last_wealthsimple_signal
+        if ws_sig:
+            st.markdown(
+                f"""
+                <div style="background: linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(15, 23, 42, 0.9) 100%);
+                            border: 1px solid rgba(16, 185, 129, 0.45); border-radius: 10px; padding: 12px; margin-bottom: 12px;
+                            box-shadow: 0 4px 16px rgba(16, 185, 129, 0.15);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                        <span style="font-weight: 800; font-size: 0.95rem; color: #10b981;">📲 WEALTHSIMPLE COPIER</span>
+                        <span style="font-size: 0.75rem; color: #94a3b8;">{ws_sig.get('timestamp', '')}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                        <span style="font-size: 1.15rem; font-weight: 700; color: #f1f5f9;">{ws_sig['action']} {ws_sig['ws_ticker']}</span>
+                        <span style="color: #38bdf8; font-size: 0.8rem; font-weight: 600;">TSX Proxy for {ws_sig['symbol']}</span>
+                    </div>
+                    <div style="margin-top: 8px; font-family: 'JetBrains Mono', monospace; font-size: 0.88rem; line-height: 1.55;">
+                        <div>• <b>Limit Entry:</b> <span style="color: #38bdf8;">${ws_sig['entry_price']:,.2f}</span></div>
+                        <div>• <b>Take Profit (TP):</b> <span style="color: #10b981;">${ws_sig['take_profit']:,.2f}</span> (+{ws_sig.get('reward_pct', 0):.2f}%)</div>
+                        <div>• <b>Stop Loss (SL):</b> <span style="color: #ef4444;">${ws_sig['stop_loss']:,.2f}</span> (-{ws_sig.get('risk_pct', 0):.2f}%)</div>
+                        <div>• <b>RRR:</b> <b>{ws_sig['rrr']:.2f}x</b> | Conf: <b>{ws_sig['confidence']:.0f}%</b></div>
+                    </div>
+                    <div style="margin-top: 6px; font-size: 0.72rem; color: #94a3b8;">
+                        🇨🇦 Ontario $0-Comm TSX ETF • Swing/Intraday (15m–1h)
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            copy_text = f"Wealthsimple Mobile Trade:\nAsset: {ws_sig['ws_ticker']} ({ws_sig['action']})\nLimit Entry: ${ws_sig['entry_price']:,.2f}\nTP: ${ws_sig['take_profit']:,.2f} (+{ws_sig.get('reward_pct', 0):.2f}%)\nSL: ${ws_sig['stop_loss']:,.2f} (-{ws_sig.get('risk_pct', 0):.2f}%)\nRRR: {ws_sig['rrr']:.2f}x"
+            st.text_area("📋 Copy for Wealthsimple App:", value=copy_text, height=85, key="ws_copy_box")
+        else:
+            ws_proxy = "BTCC.TO" if "BTC" in feed.ticker else ("ETHX.TO" if "ETH" in feed.ticker else feed.ticker)
+            regime_name = bot.current_regime.replace("_", " ")
+            st.markdown(
+                f"""
+                <div style="background: rgba(15, 23, 42, 0.65); border: 1px dashed rgba(59, 130, 246, 0.3); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-weight: 700; font-size: 0.85rem; color: #94a3b8;">📲 WEALTHSIMPLE COPIER</span>
+                        <span class="bull-badge" style="font-size: 0.7rem;">{regime_name}</span>
+                    </div>
+                    <div style="margin-top: 6px; font-size: 0.78rem; color: #64748b;">
+                        Canadian Proxy: <b>{ws_proxy}</b> (CAD $0-comm) • Standing by for regime-gated entry (min 1.0% hurdle).
                     </div>
                 </div>
                 """,

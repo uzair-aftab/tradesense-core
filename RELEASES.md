@@ -4,6 +4,53 @@ This document records the state of the TradeSense project across major releases,
 
 ---
 
+## Release `v2.3.0` — Regime-Adaptive Strategy Gating, Circuit Breakers, RTX 4070 Acceleration & Wealthsimple Real-World Mobile Copier Engine
+
+- **Date**: 2026-09-24
+- **Branch**: `overhaul/tradesense-best`
+- **Scope**: Market Regime Engine, Wilder ADX/DMI Integration, Circuit Breakers, RTX 4070 PyTorch CUDA Acceleration, Wealthsimple Mobile Trade Copier Studio, and 41 Passing Unit Tests.
+
+### Project State
+Directly addresses the forensic findings from the 6 completed live sessions (2,320 ticks, 3 hours, 21 executed trades, 15 losses) and bridges the simulator with the real-world operational realities of trading on the **Wealthsimple mobile app in North York, Ontario, Canada**. Eliminates range-ceiling buy traps through a brand-new multi-factor Market Regime Classifier, locks capital in 100% Cash Preservation during downtrends, protects drawdowns with a 2-consecutive-loss Circuit Breaker, accelerates deep learning models on the NVIDIA GeForce RTX 4070 Laptop GPU, and equips the cockpit with a dedicated 📲 Wealthsimple Mobile Trade Copier Card.
+
+### Key Features Added
+1. **Multi-Factor Market Regime Engine (`src/models/regime.py`)**:
+   - `MarketRegime` enum: `BULL_TREND`, `BEAR_TREND`, `RANGING_CHOP`, `HIGH_VOLATILITY`.
+   - `RegimeClassifier`: Computes true Wilder ADX-14, +DI, -DI, Bollinger %B, and EMA slopes.
+   - `RegimeContext`: Emits execution permissions (`allow_breakout_buys`, `allow_mean_reversion_buys`, `cash_preservation_active`).
+2. **Real-Time Dynamic Indicators in Streaming Feed (`src/data/live_feed.py`)**:
+   - Computes dynamic Wilder ADX-14, +DI, and -DI on streaming bars, replacing static defaults.
+3. **Regime-Adaptive Sub-Strategies & Ensemble Alpha (`src/models/strategies.py`)**:
+   - `DonchianVolatilityBreakout`: Gated against false breakouts in ranging chop or at Bollinger upper ceilings (%B > 90% without ADX > 28).
+   - `StatisticalMeanReversion`: Gated to buy only on true oversold channel floors (Price <= BB_Lower and RSI <= 38).
+   - `EnsembleAlpha`: Enforces 100% Cash Preservation Lock in `BEAR_TREND`; dynamically weights sub-strategies based on regime; suppresses breakout buys in `RANGING_CHOP`.
+4. **Autonomous Bot Hardening & Circuit Breakers (`src/models/bot.py`)**:
+   - **Consecutive Loss Breaker**: 2 consecutive stop-outs trigger an automated 60-tick (2-minute) execution freeze.
+   - **Wealthsimple Target Hurdle**: Enforces minimum target distance ($\ge 1.0\%$) to beat crypto spread friction and human execution latency.
+   - **Canadian Proxy Mapping**: Auto-maps `BTC-USD`/`BTC-CAD` to Canadian TSX ETF `BTCC.TO` ($0 commission on Wealthsimple).
+   - **Continuous AI Telemetry**: Auto-feeds forward quantile projections into `DeepQuantileSniper` so the bot never operates blindly.
+5. **NVIDIA RTX 4070 Laptop GPU Acceleration (`src/models/ai_engine.py`)**:
+   - Configured PyTorch mixed precision (`torch.amp.autocast`) and CUDA pinned memory (`pin_memory=True`).
+   - Non-blocking host-to-device transfers (`.to(DEVICE, non_blocking=True)`).
+   - XGBoost GPU acceleration (`device="cuda"`, `tree_method="hist"`).
+6. **Cockpit UI & Wealthsimple Mobile Copier Studio (`src/ui/app.py`)**:
+   - **Live Market Regime Badge** (`🟢 BULL TREND`, `🟡 RANGING CHOP`, `🔴 BEAR TREND - CASH LOCK`).
+   - **📲 Wealthsimple Mobile Trade Copier Card**: High-visibility card with Canadian TSX proxy, Limit Entry, TP, SL, RRR, and 1-click clipboard copy formatted for phone execution.
+   - Circuit breaker active countdown banner.
+7. **Comprehensive Automated Test Suite**:
+   - 41/41 passing unit tests across all models, strategies, regime classifier, and UI components.
+
+### Pros & Cons
+- **Pros**:
+  - Direct real-world alignment with Wealthsimple mobile trading in Ontario (zero-commission Canadian TSX ETFs, actionable swing horizons, spread hurdle protection).
+  - Eliminates the primary root cause of historical losses (buying range ceilings during chop).
+  - Rapid GPU training and inference on RTX 4070 with CUDA mixed precision.
+  - Bulletproof drawdown protection via automated circuit breakers.
+- **Cons & Trade-offs**:
+  - Stricter entry gating reduces trade frequency during choppy markets (a deliberate quant trade-off favoring high-conviction win rate over overtrading).
+
+---
+
 ## Release `v2.2.0` — Configurable Timed Bot Sessions & AI Post-Trade Telemetry Diagnostics
 
 - **Date**: 2026-09-24

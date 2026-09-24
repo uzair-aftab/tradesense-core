@@ -275,8 +275,8 @@ class LSTMBaseLeaner:
             seqs.append(X[i : i + self.seq_len])
             if y is not None:
                 targets.append(y[i + self.seq_len])
-        Xt = torch.FloatTensor(np.array(seqs)).to(DEVICE)
-        yt = torch.FloatTensor(np.array(targets)).to(DEVICE) if y is not None else None
+        Xt = torch.FloatTensor(np.array(seqs))
+        yt = torch.FloatTensor(np.array(targets)) if y is not None else None
         return Xt, yt
 
     # ── train ──────────────────────────────────────────────────────────
@@ -297,21 +297,36 @@ class LSTMBaseLeaner:
 
         dataset = torch.utils.data.TensorDataset(Xt, yt)
         loader = torch.utils.data.DataLoader(
-            dataset, batch_size=self.batch_size, shuffle=True, drop_last=True
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            drop_last=True,
+            pin_memory=CUDA_AVAILABLE,
         )
 
         self.model.train()
+        scaler = torch.amp.GradScaler("cuda", enabled=CUDA_AVAILABLE)
         final_loss = float("inf")
 
         for epoch in range(1, self.epochs + 1):
             epoch_loss = 0.0
             for xb, yb in loader:
+                xb = xb.to(DEVICE, non_blocking=True)
+                yb = yb.to(DEVICE, non_blocking=True)
                 self.optimizer.zero_grad()
-                preds = self.model(xb)
-                loss = self.criterion(preds, yb)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-                self.optimizer.step()
+                with torch.amp.autocast(device_type="cuda" if CUDA_AVAILABLE else "cpu", enabled=CUDA_AVAILABLE):
+                    preds = self.model(xb)
+                    loss = self.criterion(preds, yb)
+                if CUDA_AVAILABLE:
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                    scaler.step(self.optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                    self.optimizer.step()
                 epoch_loss += loss.item()
 
             avg_loss = epoch_loss / max(len(loader), 1)
@@ -343,6 +358,7 @@ class LSTMBaseLeaner:
 
         self.model.eval()
         with torch.no_grad():
+            Xt = Xt.to(DEVICE, non_blocking=True)
             p10_s, p50_s, p90_s = self.model(Xt)
 
         # Inverse-scale back to original price domain

@@ -199,17 +199,39 @@ class VolatilityBreakout(BaseStrategy):
         price = float(bar["Close"])
         highs = recent["High"].iloc[-self.lookback - 1 : -1]
         highest_high = float(highs.max()) if not highs.empty else price
-        adx = float(bar.get("ADX_14", 25.0))
+        adx = float(bar.get("ADX_14", 20.0))
         atr = float(bar.get("ATR_14", price * 0.02))
+        bb_u = float(bar.get("BB_Upper", price * 1.02))
+        bb_l = float(bar.get("BB_Lower", price * 0.98))
+        bb_b = (price - bb_l) / max(0.01, (bb_u - bb_l))
 
-        if price > highest_high and adx >= self.adx_threshold:
+        # Breakout Gating: strictly reject if market is chopping (ADX < threshold)
+        # or if buying directly into an unconfirmed extreme ceiling without huge momentum
+        if price > highest_high:
+            if adx < self.adx_threshold:
+                return StrategySignal(
+                    self.name,
+                    ticker,
+                    SignalType.HOLD,
+                    0.0,
+                    reason=f"Breakout suppressed in chop (ADX={adx:.1f} < {self.adx_threshold:.1f})",
+                )
+            if bb_b > 0.90 and adx < 28.0:
+                return StrategySignal(
+                    self.name,
+                    ticker,
+                    SignalType.HOLD,
+                    0.0,
+                    reason=f"Breakout suppressed at ceiling (BB%B={bb_b*100:.1f}%, ADX={adx:.1f})",
+                )
+
             stop = price - 2.0 * atr
             target = price + 4.0 * atr
             return StrategySignal(
                 self.name,
                 ticker,
                 SignalType.BUY,
-                strength=min(1.0, adx / 40.0),
+                strength=min(1.0, max(0.70, adx / 35.0)),
                 target_price=target,
                 stop_price=stop,
                 reason=f"Breakout above {self.lookback}-bar high (${highest_high:.2f}) | ADX={adx:.1f}",
@@ -242,27 +264,31 @@ class StatisticalMeanReversion(BaseStrategy):
         lower_bb = float(bar.get("BB_Lower", price * 0.98))
         upper_bb = float(bar.get("BB_Upper", price * 1.02))
         mid_bb = float(bar.get("BB_Mid", price))
+        rsi = float(bar.get("RSI_14", 50.0))
+        atr = float(bar.get("ATR_14", price * 0.01))
 
-        # Oversold bounce
-        if price <= lower_bb:
+        # Oversold bounce: Price touching lower band AND RSI oversold (< 38)
+        if price <= lower_bb and rsi <= 38.0:
+            target = max(mid_bb, price + 2.0 * atr)
+            stop = price - 1.5 * atr
             return StrategySignal(
                 self.name,
                 ticker,
                 SignalType.BUY,
-                strength=0.75,
-                target_price=mid_bb,
-                stop_price=price * 0.985,
-                reason=f"Mean reversion bounce off lower band (${lower_bb:.2f}) towards mid (${mid_bb:.2f})",
+                strength=0.80,
+                target_price=target,
+                stop_price=stop,
+                reason=f"Mean reversion floor bounce (${lower_bb:.2f}) | RSI={rsi:.1f}",
             )
-        elif price >= upper_bb:
+        elif price >= upper_bb and rsi >= 62.0:
             return StrategySignal(
                 self.name,
                 ticker,
                 SignalType.SELL,
                 strength=0.75,
                 target_price=mid_bb,
-                stop_price=price * 1.015,
-                reason=f"Mean reversion fade off upper band (${upper_bb:.2f}) towards mid (${mid_bb:.2f})",
+                stop_price=price + 1.5 * atr,
+                reason=f"Mean reversion ceiling fade (${upper_bb:.2f}) | RSI={rsi:.1f}",
             )
 
         return StrategySignal(self.name, ticker, SignalType.HOLD, 0.0, reason="Price inside bands")
@@ -271,7 +297,7 @@ class StatisticalMeanReversion(BaseStrategy):
 class EnsembleAlpha(BaseStrategy):
     """
     Strategy 5: Ensemble Multi-Strategy Alpha.
-    Aggregates consensus votes across all sub-strategies with conviction weighting.
+    Aggregates consensus votes across all sub-strategies with dynamic market regime gating.
     """
 
     def __init__(self, strategies: Optional[List[BaseStrategy]] = None):
@@ -282,6 +308,9 @@ class EnsembleAlpha(BaseStrategy):
             VolatilityBreakout(),
             StatisticalMeanReversion(),
         ]
+        from src.models.regime import RegimeClassifier
+        self.regime_classifier = RegimeClassifier()
+        self.last_regime_context = None
 
     def generate_signal(
         self,
@@ -290,16 +319,75 @@ class EnsembleAlpha(BaseStrategy):
         prediction: Optional[QuantilePrediction] = None,
     ) -> StrategySignal:
         ticker = "ASSET"
+        price = float(df["Close"].iloc[current_idx]) if not df.empty else 100.0
+
+        # 1. Evaluate Active Market Regime
+        regime_ctx = self.regime_classifier.classify(df, current_idx)
+        self.last_regime_context = regime_ctx
+
+        # 2. Hard Cash Preservation Guard in Bear Trends
+        if regime_ctx.cash_preservation_active:
+            self.last_sub_signals = []
+            self.last_buy_votes = 0.0
+            self.last_sell_votes = 1.0
+            return StrategySignal(
+                self.name,
+                ticker,
+                SignalType.HOLD,
+                0.0,
+                reason=f"CASH PRESERVATION LOCK: {regime_ctx.reason}",
+            )
+
+        # 3. Query Sub-Strategies
         signals = [s.generate_signal(df, current_idx, prediction) for s in self.strategies]
         self.last_sub_signals = signals
 
-        buy_votes = sum(s.strength for s in signals if s.signal_type == SignalType.BUY)
-        sell_votes = sum(s.strength for s in signals if s.signal_type == SignalType.SELL)
+        # 4. Regime-Adaptive Conviction Weighting
+        buy_votes = 0.0
+        sell_votes = 0.0
+        from src.models.regime import MarketRegime
+
+        for s in signals:
+            strat_name = s.strategy_name
+            weight = 1.0
+
+            if regime_ctx.regime == MarketRegime.BULL_TREND:
+                # In Bull Trend: amplify breakout & whale flow; mute mean reversion fades
+                if strat_name in ("Volatility Breakout", "Donchian Volatility Breakout"):
+                    weight = 1.3
+                elif strat_name == "Institutional Whale Flow":
+                    weight = 1.2
+                elif strat_name == "Statistical Mean Reversion":
+                    weight = 0.2
+            elif regime_ctx.regime == MarketRegime.RANGING_CHOP:
+                # In Range Chop: suppress breakouts; amplify mean reversion
+                if strat_name in ("Volatility Breakout", "Donchian Volatility Breakout"):
+                    weight = 0.0  # Zero weight to breakout buys in chop!
+                elif strat_name == "Statistical Mean Reversion":
+                    weight = 1.5
+                elif strat_name == "Institutional Whale Flow":
+                    weight = 0.5
+
+            if s.signal_type == SignalType.BUY:
+                buy_votes += s.strength * weight
+            elif s.signal_type == SignalType.SELL:
+                sell_votes += s.strength * weight
+
         self.last_buy_votes = buy_votes
         self.last_sell_votes = sell_votes
 
-        min_threshold = 0.65 if prediction is None else 1.0
-        price = float(df["Close"].iloc[current_idx]) if not df.empty else 100.0
+        min_threshold = 0.65 if prediction is None else 0.90
+
+        # In Ranging Chop, never allow BUY if price is at upper half of Bollinger Band
+        if regime_ctx.regime == MarketRegime.RANGING_CHOP and buy_votes >= min_threshold:
+            if not regime_ctx.allow_mean_reversion_buys:
+                return StrategySignal(
+                    self.name,
+                    ticker,
+                    SignalType.HOLD,
+                    0.0,
+                    reason=f"BUY suppressed in range chop (BB%B={regime_ctx.bb_pct_b*100:.1f}% > 20%)",
+                )
 
         if buy_votes > sell_votes and buy_votes >= min_threshold:
             reasons = [f"{s.strategy_name}: {s.reason}" for s in signals if s.signal_type == SignalType.BUY]
@@ -313,7 +401,7 @@ class EnsembleAlpha(BaseStrategy):
                 strength=strength,
                 target_price=float(np.mean(targets)) if targets else price * 1.03,
                 stop_price=float(np.mean(stops)) if stops else price * 0.98,
-                reason=" | ".join(reasons[:2]),
+                reason=f"[{regime_ctx.regime.value}] " + " | ".join(reasons[:2]),
             )
         elif sell_votes > buy_votes and sell_votes >= min_threshold:
             reasons = [f"{s.strategy_name}: {s.reason}" for s in signals if s.signal_type == SignalType.SELL]
@@ -325,10 +413,17 @@ class EnsembleAlpha(BaseStrategy):
                 strength=strength,
                 target_price=price * 0.97,
                 stop_price=price * 1.02,
-                reason=" | ".join(reasons[:2]),
+                reason=f"[{regime_ctx.regime.value}] " + " | ".join(reasons[:2]),
             )
 
-        return StrategySignal(self.name, ticker, SignalType.HOLD, 0.0, reason=f"Consensus below threshold ({buy_votes:.2f} / {min_threshold:.2f})")
+        return StrategySignal(
+            self.name,
+            ticker,
+            SignalType.HOLD,
+            0.0,
+            reason=f"Consensus below threshold ({buy_votes:.2f} / {min_threshold:.2f}) [{regime_ctx.regime.value}]",
+        )
+
 
 
 class StrategyArena:

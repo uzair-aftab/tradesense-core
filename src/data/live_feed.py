@@ -336,13 +336,24 @@ class LiveMarketFeed:
         df["RSI_14"] = 100.0 - (100.0 / (1.0 + rs))
         df["RSI_14"] = df["RSI_14"].fillna(50.0)
 
-        # ATR (14) & ADX estimate
+        # ATR (14) & Dynamic Wilder ADX (14)
         high_low = df["High"] - df["Low"]
         high_close = (df["High"] - closes.shift(1)).abs()
         low_close = (df["Low"] - closes.shift(1)).abs()
         tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
         df["ATR_14"] = tr.rolling(window=min(14, len(df)), min_periods=3).mean().fillna(self._current_price * 0.01)
-        df["ADX_14"] = 28.0  # Stable institutional trend indicator estimate
+
+        try:
+            from src.models.regime import RegimeClassifier
+            adx_s, plus_s, minus_s = RegimeClassifier.compute_adx_dmi(df)
+            df["ADX_14"] = adx_s
+            df["Plus_DI"] = plus_s
+            df["Minus_DI"] = minus_s
+        except Exception:
+            df["ADX_14"] = 20.0
+            df["Plus_DI"] = 20.0
+            df["Minus_DI"] = 20.0
+
 
         # VWAP
         if "Volume" in df.columns:

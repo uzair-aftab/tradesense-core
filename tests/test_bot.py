@@ -236,3 +236,76 @@ def test_chart_time_label_uniqueness():
     assert len(set(dup_labels)) == 3
     assert "#2" in dup_labels[1]
 
+
+def test_bot_consecutive_loss_circuit_breaker():
+    """Verify 2 consecutive stop-outs trigger a 60-tick circuit breaker pause."""
+    feed = LiveMarketFeed("BTC-USD", mode=StreamMode.SYNTHETIC_MICROSTRUCTURE)
+    bot = AutonomousSniperBot(feed)
+    assert bot._circuit_breaker_ticks == 0
+    assert bot._consecutive_losses == 0
+
+    # Simulate first loss
+    bot._consecutive_losses = 1
+    assert bot._circuit_breaker_ticks == 0
+
+    # Simulate second loss via Fill event
+    from src.models.trader import Fill, Side
+    fill = Fill(
+        order_id="test1",
+        ticker="BTC-USD",
+        side=Side.SELL,
+        quantity=0.1,
+        intended_price=80000.0,
+        fill_price=79000.0,
+        commission=5.0,
+        slippage_pct=0.01,
+        total_cost=7905.0,
+        pnl=-105.0,
+        exit_reason="STOP_LOSS",
+    )
+    bot.gauntlet.fills.append(fill)
+
+    # Step bot once to trigger fill processing
+    bot.step()
+    assert bot._consecutive_losses == 2
+    assert bot._circuit_breaker_ticks > 0
+
+
+def test_bot_wealthsimple_signal_payload():
+    """Verify autonomous bot formats structured Wealthsimple copier signal."""
+    feed = LiveMarketFeed("BTC-USD", mode=StreamMode.SYNTHETIC_MICROSTRUCTURE)
+    bot = AutonomousSniperBot(feed)
+    assert bot.last_wealthsimple_signal is None
+
+    # Force a BUY execution
+    class AlwaysBuyStrategy(BaseStrategy):
+        def generate_signal(self, df, current_idx=-1, prediction=None):
+            p = float(df["Close"].iloc[-1])
+            return StrategySignal(self.name, "BTC-USD", SignalType.BUY, 0.90, target_price=p * 1.05, stop_price=p * 0.98, reason="Strong Bull Run")
+
+    bot.strategy = AlwaysBuyStrategy("AlwaysBuy")
+    bot.arm()
+    bot.step()
+
+    assert bot.last_wealthsimple_signal is not None
+    sig = bot.last_wealthsimple_signal
+    assert sig["symbol"] == "BTC-USD"
+    assert sig["ws_ticker"] == "BTCC.TO"
+    assert sig["action"] == "BUY"
+    assert sig["take_profit"] > sig["entry_price"]
+    assert sig["entry_price"] > sig["stop_loss"]
+    assert sig["reward_pct"] >= 1.0
+
+
+def test_bot_regime_metrics_telemetry():
+    """Verify bot metrics include Regime and CircuitBreakerTicks."""
+    feed = LiveMarketFeed("BTC-USD", mode=StreamMode.SYNTHETIC_MICROSTRUCTURE)
+    bot = AutonomousSniperBot(feed)
+    metrics = bot.get_metrics()
+    assert "Regime" in metrics
+    assert "CircuitBreakerTicks" in metrics
+    assert metrics["CircuitBreakerTicks"] == 0
+    assert bot.current_regime in ("BULL_TREND", "BEAR_TREND", "RANGING_CHOP", "HIGH_VOLATILITY")
+
+
+
