@@ -121,6 +121,9 @@ class LiveMarketFeed:
         else:
             self._streaming_df = self._generate_initial_baseline()
 
+        if "Volume" in self._streaming_df.columns:
+            self._streaming_df["Volume"] = self._streaming_df["Volume"].astype(float)
+
         self._refresh_indicators()
 
     def _generate_initial_baseline(self) -> pd.DataFrame:
@@ -336,6 +339,8 @@ class LiveMarketFeed:
         if self.base_df is not None and len(self.base_df) > 30:
             self._replay_idx = max(0, len(self.base_df) - 30)
             self._streaming_df = self.base_df.iloc[: self._replay_idx + 1].copy()
+            if "Volume" in self._streaming_df.columns:
+                self._streaming_df["Volume"] = self._streaming_df["Volume"].astype(float)
             self._current_price = float(self._streaming_df["Close"].iloc[-1])
             self._tick_history.clear()
             self._refresh_indicators()
