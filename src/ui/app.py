@@ -14,6 +14,7 @@ Institutional-grade Streamlit trading cockpit featuring:
 from __future__ import annotations
 
 import io
+import json
 import sys
 import time
 from datetime import datetime, timezone
