@@ -91,7 +91,7 @@ class TradeOrder:
 
     ticker: str
     side: Side
-    quantity: int
+    quantity: float
     price: float  # intended limit / market price
     order_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     exit_reason: str = "MANUAL"
@@ -107,7 +107,7 @@ class Fill:
     order_id: str
     ticker: str
     side: Side
-    quantity: int
+    quantity: float
     intended_price: float
     fill_price: float  # after slippage
     commission: float
@@ -130,7 +130,7 @@ class Position:
     """Open position tracker."""
 
     ticker: str
-    quantity: int
+    quantity: float
     avg_cost: float
     current_price: float = 0.0
 
@@ -278,11 +278,13 @@ class Gauntlet:
         else:
             fill_price = order.price * (1 - slip_pct)  # receive less
 
-        # ── Commission ────────────────────────────────────────────────
+        # ── Validation ────────────────────────────────────────────────
+        if order.quantity <= 0:
+            raise ValueError(f"Quantity must be positive, got {order.quantity}")
+
         trade_value = order.quantity * fill_price
         commission = max(self.commission_flat, trade_value * self.commission_pct)
 
-        # ── Validation ────────────────────────────────────────────────
         if order.side == Side.BUY:
             total_cost = trade_value + commission
             if total_cost > self.cash:
@@ -291,8 +293,8 @@ class Gauntlet:
                 )
         else:
             pos = self.positions.get(order.ticker)
-            if pos is None or pos.quantity < order.quantity:
-                held = pos.quantity if pos else 0
+            if pos is None or pos.quantity < order.quantity - 1e-6:
+                held = pos.quantity if pos else 0.0
                 raise ValueError(
                     f"Cannot sell {order.quantity} {order.ticker} — only hold {held}"
                 )
@@ -309,11 +311,11 @@ class Gauntlet:
                     (pos.avg_cost * pos.quantity + fill_price * order.quantity)
                     / total_qty
                 )
-                pos.quantity = total_qty
+                pos.quantity = round(total_qty, 6)
             else:
                 self.positions[order.ticker] = Position(
                     ticker=order.ticker,
-                    quantity=order.quantity,
+                    quantity=round(order.quantity, 6),
                     avg_cost=fill_price,
                     current_price=fill_price,
                 )
@@ -322,8 +324,8 @@ class Gauntlet:
             pos = self.positions[order.ticker]
             pnl = (fill_price - pos.avg_cost) * order.quantity - commission
             self.cash += trade_value - commission
-            pos.quantity -= order.quantity
-            if pos.quantity == 0:
+            pos.quantity = round(pos.quantity - order.quantity, 6)
+            if pos.quantity <= 1e-6:
                 del self.positions[order.ticker]
 
         fill = Fill(
@@ -571,7 +573,8 @@ class Gauntlet:
         price: float,
         stop_price: float,
         risk_pct: float = 0.02,
-    ) -> int:
+        allow_fractional: bool = True,
+    ) -> float:
         """
         Fixed-risk position sizer.
 
@@ -586,11 +589,13 @@ class Gauntlet:
             Stop-loss price (often the AI's P10 prediction).
         risk_pct : float
             Max fraction of equity to risk (default 2 %).
+        allow_fractional : bool
+            Whether fractional quantities are permitted (e.g. for crypto).
 
         Returns
         -------
-        int
-            Number of shares (floored).
+        float
+            Number of shares.
         """
         equity = self.total_equity
         risk_dollars = equity * risk_pct
@@ -598,12 +603,31 @@ class Gauntlet:
 
         if risk_per_share <= 0:
             logger.warning("Stop price >= entry price — returning 0 shares")
-            return 0
+            return 0.0
 
-        shares = int(risk_dollars / risk_per_share)
-        # Cap at what cash can buy
-        max_affordable = int(self.cash / (price * (1 + self.slippage_range[1])))
-        return min(shares, max_affordable)
+        raw_shares = risk_dollars / risk_per_share
+        max_affordable = self.cash * 0.95 / (price * (1 + self.slippage_range[1]))
+        target = min(raw_shares, max_affordable)
+
+        if not allow_fractional:
+            return float(max(0, int(target)))
+
+        if price >= 1000.0:
+            return round(target, 4)
+        elif price >= 10.0:
+            return round(target, 2)
+        return round(target, 1)
+
+    def calculate_max_shares(self, price: float, cash_buffer: float = 0.95) -> float:
+        """Calculate maximum affordable shares with cash safety buffer."""
+        if price <= 0:
+            return 0.0
+        affordable = (self.cash * cash_buffer) / price
+        if price >= 1000.0:
+            return round(affordable, 4)
+        elif price >= 10.0:
+            return round(affordable, 2)
+        return round(affordable, 1)
 
     def kelly_position_size(
         self,
@@ -715,7 +739,7 @@ class Gauntlet:
         signals: pd.DataFrame,
         price_col: str = "Close",
         signal_col: str = "signal",
-        quantity: int = 10,
+        quantity: float = 10.0,
     ) -> PortfolioMetrics:
         """
         Run a vectorised backtest from a signal DataFrame.
@@ -728,7 +752,7 @@ class Gauntlet:
             Column with prices.
         signal_col : str
             Column with trade signals.
-        quantity : int
+        quantity : float
             Shares per trade.
 
         Returns

@@ -4,6 +4,44 @@ This document records the state of the TradeSense project across major releases,
 
 ---
 
+## Release `v2.1.0` — Institutional Execution Hardening, Fractional Sizing & Professional Candle Aggregation
+
+- **Date**: 2026-09-24
+- **Branch**: `overhaul/tradesense-best`
+- **Scope**: Execution Hardening, Crypto Support, and Chart Aesthetics
+
+### Project State
+Addresses real-world edge cases in high-priced asset execution (e.g. BTC at $80k+), fixes per-tick candle fragmentation, introduces fractional order sizing (USD amount & fractional coins), adds dynamic indicator calculation on streaming bars, and enforces strict cash validation with friendly UI error handling.
+
+### Key Features Added
+1. **Fractional Sizing & Multi-Asset Support (`src/models/trader.py`)**:
+   - `TradeOrder`, `Position`, and `Fill` support high-precision `float` quantities.
+   - Fixed fatal integer truncation bug where trading BTC ($80k) with a $10k portfolio evaluated to `int(0)` units.
+2. **Professional Forming Candle Aggregation (`src/data/live_feed.py`)**:
+   - Ticks now update the active forming candle; new candles open continuously with `Open = previous Close`, eliminating disjointed floating sticks.
+   - Calibrated Merton Jump-Diffusion SDE to realistic 4-bps volatility with mean-reverting anchor drift.
+   - Dynamically computes EMAs (9, 20, 50), Bollinger Bands, RSI (14), and ATR on streaming bars.
+3. **Smart Order Sizing & Graceful UI Validation (`src/ui/app.py`)**:
+   - Added dual order sizing modes: **Capital to Commit in USD ($)** vs **Asset Units**.
+   - Real-time estimated cost badge with cash validation.
+   - Replaced raw Streamlit crash tracebacks with user-friendly error and toast notifications.
+4. **Enhanced Candlestick Chart Aesthetics (`src/ui/app.py`)**:
+   - Category x-axis mode eliminates awkward gaps between bars.
+   - Plotly dark neon palette (`#00E676` bullish / `#FF1744` bearish) with live horizontal price trackers, entry price levels, and Bollinger cloud.
+5. **Adaptive Strategy Consensus (`src/models/strategies.py`, `src/models/bot.py`)**:
+   - `EnsembleAlpha` scales threshold dynamically when ML predictions are pending.
+   - Heartbeat telemetry logs active scanning so the user sees real-time bot decision-making.
+
+### Pros & Cons
+- **Pros**:
+  - Completely fixes the manual buy crash (`ValueError: Insufficient cash`).
+  - Bot can now seamlessly trade any asset from penny stocks to $100k Bitcoin with fractional lots.
+  - Candlestick charts look continuous, solid, and professional like Binance/TradingView.
+- **Cons & Trade-offs**:
+  - Forming candle aggregation groups ticks into intervals (e.g. 5 ticks), meaning a new candle appears every ~10s instead of every 2s, but the active candle updates continuously.
+
+---
+
 ## Release `v2.0.0` — Real-Time Streaming Cockpit, Microstructure Replay & Institutional Strategy Arena
 
 - **Date**: 2026-09-24

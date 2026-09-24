@@ -190,6 +190,13 @@ class AutonomousSniperBot:
             and len(self.gauntlet.positions) < self.config.max_open_positions
         ):
             self._evaluate_signals_and_execute(current_price, prediction)
+        elif self.state == BotState.ARMED and self._total_ticks_processed % 8 == 0:
+            open_count = len(self.gauntlet.positions)
+            self.log(
+                "INFO",
+                f"🤖 Sniper Bot scanning order flow ({open_count}/{self.config.max_open_positions} positions open)",
+                price=current_price,
+            )
 
         return tick
 
@@ -225,15 +232,26 @@ class AutonomousSniperBot:
             if rrr < self.config.min_rrr:
                 return
 
-            # Position sizing (Risk 2% of portfolio cash)
+            # Fractional position sizing based on risk capital
             risk_capital = self.gauntlet.cash * self.config.risk_per_trade
-            qty = max(1, int(risk_capital / risk))
+            raw_qty = risk_capital / risk
+            max_qty = (self.gauntlet.cash * 0.95) / current_price
+            qty = min(raw_qty, max_qty)
 
-            # Ensure we have enough cash for position
-            max_qty = int(self.gauntlet.cash * 0.95 / current_price)
-            qty = min(qty, max_qty)
-            if qty <= 0:
-                return
+            if current_price >= 1000.0:
+                qty = round(qty, 4)
+            elif current_price >= 10.0:
+                qty = round(qty, 2)
+            else:
+                qty = round(qty, 1)
+
+            if qty <= 0 or (qty * current_price) < 5.0:
+                min_fractional = round(min(100.0 / current_price, max_qty), 4 if current_price >= 1000 else 2)
+                if min_fractional > 0 and (min_fractional * current_price) <= self.gauntlet.cash * 0.95:
+                    qty = min_fractional
+                else:
+                    self.log("INFO", f"Order skipped: Insufficient capital for minimum lot size @ ${current_price:,.2f}", price=current_price)
+                    return
 
             trailing_pct = self.config.trailing_stop_pct if self.config.trailing_stop_enabled else None
 
@@ -267,6 +285,7 @@ class AutonomousSniperBot:
                     },
                 )
             except Exception as e:
+                self.log("ERROR", f"Execution error: {e}", price=current_price)
                 logger.error("Failed to execute buy order: %s", e)
 
     def get_metrics(self) -> Dict[str, Any]:

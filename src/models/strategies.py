@@ -295,34 +295,36 @@ class EnsembleAlpha(BaseStrategy):
         buy_votes = sum(s.strength for s in signals if s.signal_type == SignalType.BUY)
         sell_votes = sum(s.strength for s in signals if s.signal_type == SignalType.SELL)
 
-        price = float(df["Close"].iloc[current_idx]) if not df.empty else 100.0
+        min_threshold = 0.65 if prediction is None else 1.0
 
-        if buy_votes > sell_votes and buy_votes >= 1.2:
+        if buy_votes > sell_votes and buy_votes >= min_threshold:
             reasons = [f"{s.strategy_name}: {s.reason}" for s in signals if s.signal_type == SignalType.BUY]
             targets = [s.target_price for s in signals if s.target_price]
             stops = [s.stop_price for s in signals if s.stop_price]
+            strength = min(1.0, max(0.70, buy_votes / len(self.strategies) * 1.5))
             return StrategySignal(
                 self.name,
                 ticker,
                 SignalType.BUY,
-                strength=min(1.0, buy_votes / len(self.strategies)),
+                strength=strength,
                 target_price=float(np.mean(targets)) if targets else price * 1.03,
                 stop_price=float(np.mean(stops)) if stops else price * 0.98,
                 reason=" | ".join(reasons[:2]),
             )
-        elif sell_votes > buy_votes and sell_votes >= 1.2:
+        elif sell_votes > buy_votes and sell_votes >= min_threshold:
             reasons = [f"{s.strategy_name}: {s.reason}" for s in signals if s.signal_type == SignalType.SELL]
+            strength = min(1.0, max(0.70, sell_votes / len(self.strategies) * 1.5))
             return StrategySignal(
                 self.name,
                 ticker,
                 SignalType.SELL,
-                strength=min(1.0, sell_votes / len(self.strategies)),
+                strength=strength,
                 target_price=price * 0.97,
                 stop_price=price * 1.02,
                 reason=" | ".join(reasons[:2]),
             )
 
-        return StrategySignal(self.name, ticker, SignalType.HOLD, 0.0, reason="No strategy consensus")
+        return StrategySignal(self.name, ticker, SignalType.HOLD, 0.0, reason=f"Consensus below threshold ({buy_votes:.2f} / {min_threshold:.2f})")
 
 
 class StrategyArena:

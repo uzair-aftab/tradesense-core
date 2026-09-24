@@ -97,3 +97,22 @@ def test_position_sizer(sim):
         avg_loss_pct=0.02,
     )
     assert shares_kelly > 0
+
+
+def test_fractional_crypto_trading(sim):
+    """Verify buying and selling fractional units (e.g. 0.05 BTC)."""
+    # Buy 0.05 BTC at $80,000.00 (Cost = $4,000 + slip + comm)
+    buy_order = TradeOrder(ticker="BTC-USD", side=Side.BUY, quantity=0.05, price=80000.0)
+    fill_buy = sim.submit_order(buy_order)
+
+    assert fill_buy.quantity == 0.05
+    assert "BTC-USD" in sim.positions
+    assert sim.positions["BTC-USD"].quantity == pytest.approx(0.05)
+
+    # Sell 0.05 BTC at $84,000.00
+    sell_order = TradeOrder(ticker="BTC-USD", side=Side.SELL, quantity=0.05, price=84000.0)
+    fill_sell = sim.submit_order(sell_order)
+
+    assert fill_sell.quantity == 0.05
+    assert fill_sell.pnl > 180.0  # Profitable fractional trade
+    assert "BTC-USD" not in sim.positions  # Fully closed

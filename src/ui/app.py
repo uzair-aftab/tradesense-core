@@ -508,45 +508,57 @@ def _render_live_streaming_fragment() -> None:
     chart_col, control_col = st.columns([2.5, 1])
 
     with chart_col:
-        # Build live candlestick chart from streaming_df
         streaming_df = feed.streaming_df
         if streaming_df.empty:
             st.info("Market stream initializing…")
             return
 
-        display_df = streaming_df.tail(60)
+        display_df = streaming_df.tail(60).copy()
+        time_labels = [ts.strftime("%H:%M:%S") if hasattr(ts, "strftime") else str(ts) for ts in display_df.index]
 
         fig = make_subplots(
             rows=2,
             cols=1,
             shared_xaxes=True,
-            row_heights=[0.75, 0.25],
+            row_heights=[0.78, 0.22],
             vertical_spacing=0.03,
         )
 
-        # Candlestick
+        # Candlestick with category x-axis to eliminate ugly time gaps
         fig.add_trace(
             go.Candlestick(
-                x=display_df.index,
+                x=time_labels,
                 open=display_df["Open"],
                 high=display_df["High"],
                 low=display_df["Low"],
                 close=display_df["Close"],
                 name="Price",
-                increasing_line_color="#10b981",
-                decreasing_line_color="#ef4444",
+                increasing_line_color="#00E676",
+                increasing_fillcolor="#00E676",
+                decreasing_line_color="#FF1744",
+                decreasing_fillcolor="#FF1744",
             ),
             row=1,
             col=1,
         )
 
-        # Moving Averages
-        if len(display_df) >= 20:
-            ma20 = display_df["Close"].rolling(20).mean()
+        # Smooth Technical EMAs
+        if "EMA_9" in display_df.columns:
             fig.add_trace(
                 go.Scatter(
-                    x=display_df.index,
-                    y=ma20,
+                    x=time_labels,
+                    y=display_df["EMA_9"],
+                    name="EMA 9",
+                    line=dict(color="#fbbf24", width=1.2),
+                ),
+                row=1,
+                col=1,
+            )
+        if "EMA_20" in display_df.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=time_labels,
+                    y=display_df["EMA_20"],
                     name="EMA 20",
                     line=dict(color="#38bdf8", width=1.5, dash="dot"),
                 ),
@@ -554,51 +566,47 @@ def _render_live_streaming_fragment() -> None:
                 col=1,
             )
 
-        # Quantile Confidence Cloud (if prediction exists)
-        if pred is not None:
-            last_x = display_df.index[-1]
-            start_x = display_df.index[max(0, len(display_df) - 6)]
-            fig.add_shape(
-                type="rect",
-                x0=start_x,
-                x1=last_x,
-                y0=pred.p10,
-                y1=pred.p90,
-                fillcolor="rgba(56, 189, 248, 0.15)",
-                line=dict(width=0),
+        # Bollinger Bands Cloud
+        if "BB_Upper" in display_df.columns and "BB_Lower" in display_df.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=time_labels,
+                    y=display_df["BB_Upper"],
+                    name="BB Upper",
+                    line=dict(color="rgba(148, 163, 184, 0.3)", width=1),
+                    showlegend=False,
+                ),
                 row=1,
                 col=1,
             )
-            # P50 median path
-            fig.add_hline(
-                y=pred.p50,
-                line_dash="dash",
-                line_color="#38bdf8",
-                annotation_text=f"P50 ${pred.p50:,.2f}",
-                annotation_position="top right",
-                row=1,
-                col=1,
-            )
-            fig.add_hline(
-                y=pred.p90,
-                line_dash="dot",
-                line_color="#10b981",
-                annotation_text=f"P90 Target ${pred.p90:,.2f}",
-                annotation_position="top right",
-                row=1,
-                col=1,
-            )
-            fig.add_hline(
-                y=pred.p10,
-                line_dash="dot",
-                line_color="#ef4444",
-                annotation_text=f"P10 Floor ${pred.p10:,.2f}",
-                annotation_position="bottom right",
+            fig.add_trace(
+                go.Scatter(
+                    x=time_labels,
+                    y=display_df["BB_Lower"],
+                    name="BB Bands",
+                    fill="tonexty",
+                    fillcolor="rgba(56, 189, 248, 0.05)",
+                    line=dict(color="rgba(148, 163, 184, 0.3)", width=1),
+                ),
                 row=1,
                 col=1,
             )
 
-        # Trailing stop floor line for active position
+        # Active Entry Price Line
+        if feed.ticker in bot.gauntlet.positions:
+            pos = bot.gauntlet.positions[feed.ticker]
+            fig.add_hline(
+                y=pos.avg_cost,
+                line_dash="dot",
+                line_color="#c084fc",
+                line_width=1.5,
+                annotation_text=f"Position Entry: ${pos.avg_cost:,.2f}",
+                annotation_position="top left",
+                row=1,
+                col=1,
+            )
+
+        # Active Trailing Stop Floor
         if bot.config.symbol in bot.gauntlet._trailing_stops:
             ts_price = bot.gauntlet._trailing_stops[bot.config.symbol]["stop_price"]
             fig.add_hline(
@@ -606,36 +614,50 @@ def _render_live_streaming_fragment() -> None:
                 line_dash="solid",
                 line_color="#f59e0b",
                 line_width=2,
-                annotation_text=f"🛡️ Trailing Stop ${ts_price:,.2f}",
+                annotation_text=f"🛡️ Trailing Floor: ${ts_price:,.2f}",
                 annotation_position="bottom left",
                 row=1,
                 col=1,
             )
 
-        # Volume Bar Subplot with Whale Highlighting
-        colors = [
-            "#f59e0b" if flag == 1 else "#334155"
+        # Current Price Horizontal Tracker
+        fig.add_hline(
+            y=tick.price,
+            line_dash="dash",
+            line_color="#38bdf8",
+            line_width=1,
+            annotation_text=f"Live: ${tick.price:,.2f}",
+            annotation_position="right",
+            row=1,
+            col=1,
+        )
+
+        # Volume Bar Subplot with Whale Alerts
+        vol_colors = [
+            "#f59e0b" if flag == 1 else "rgba(100, 116, 139, 0.4)"
             for flag in display_df.get("Whale_Flag", [0] * len(display_df))
         ]
         fig.add_trace(
             go.Bar(
-                x=display_df.index,
+                x=time_labels,
                 y=display_df.get("Volume", [1000] * len(display_df)),
                 name="Volume",
-                marker_color=colors,
+                marker_color=vol_colors,
             ),
             row=2,
             col=1,
         )
 
+        fig.update_xaxes(type="category", row=1, col=1)
+        fig.update_xaxes(type="category", row=2, col=1)
         fig.update_layout(
             template="plotly_dark",
             height=500,
-            margin=dict(l=40, r=40, t=20, b=20),
+            margin=dict(l=40, r=60, t=20, b=20),
             xaxis_rangeslider_visible=False,
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(15, 23, 42, 0.6)",
-            legend=dict(orientation="h", y=1.02, x=0.01),
+            legend=dict(orientation="h", y=1.03, x=0.01),
         )
         st.plotly_chart(fig, use_container_width=True)
 
@@ -659,37 +681,72 @@ def _render_live_streaming_fragment() -> None:
                 """,
                 unsafe_allow_html=True,
             )
-        else:
-            st.caption("Generate model forecast to evaluate probabilistic quantile target.")
 
-        # Manual / Guided Order Placement
-        st.markdown("**⚡ Instant Bracket Order**")
-        order_qty = st.number_input("Shares / Units", min_value=1, value=10, step=1)
         cur_p = tick.price
+        avail_cash = bot.gauntlet.cash
+
+        # Smart Order Sizing Mode
+        st.markdown("**⚡ Instant Bracket Order**")
+        size_mode = st.radio("Order Sizing", ["Dollar Amount ($)", "Units / Coins"], horizontal=True, label_visibility="collapsed")
+
+        if size_mode == "Dollar Amount ($)":
+            default_dollars = min(1000.0, avail_cash * 0.25)
+            order_usd = st.number_input("Capital to Commit ($)", min_value=10.0, max_value=float(max(10.0, avail_cash)), value=float(max(10.0, default_dollars)), step=100.0)
+            order_qty = round(order_usd / cur_p, 4 if cur_p >= 1000 else 2)
+        else:
+            default_units = 0.02 if cur_p >= 1000 else 10.0
+            order_qty = st.number_input(
+                f"Units of {feed.ticker}",
+                min_value=0.0001,
+                value=float(default_units),
+                step=0.01 if cur_p >= 1000 else 1.0,
+                format="%.4f" if cur_p >= 1000 else "%.2f",
+            )
+            order_usd = order_qty * cur_p
+
+        # Real-time Order Estimation Badge
+        st.caption(f"Estimated Cost: **${order_usd:,.2f}** ({order_qty} {feed.ticker}) | Cash: **${avail_cash:,.2f}**")
+
         sl_calc = cur_p * 0.98
         tp_calc = cur_p * 1.04
 
         col_b1, col_b2 = st.columns(2)
         with col_b1:
             if st.button("🟢 BUY BRACKET", use_container_width=True):
-                order = TradeOrder(ticker=feed.ticker, side=Side.BUY, quantity=order_qty, price=cur_p)
-                bot.gauntlet.submit_bracket_order(
-                    order=order,
-                    stop_loss=sl_calc,
-                    take_profit=tp_calc,
-                    trailing_stop_pct=bot.config.trailing_stop_pct,
-                )
-                bot.log("ORDER_BUY", f"Manual BUY {order_qty} {feed.ticker} @ ${cur_p:,.2f}", price=cur_p)
-                st.toast(f"Executed BUY {order_qty} {feed.ticker} @ ${cur_p:,.2f}", icon="🟢")
+                if order_usd > avail_cash:
+                    st.error(f"❌ Insufficient cash: Need ${order_usd:,.2f}, but available cash is ${avail_cash:,.2f}. Reduce size.")
+                elif order_qty <= 0:
+                    st.warning("⚠️ Quantity must be greater than 0.")
+                else:
+                    try:
+                        order = TradeOrder(ticker=feed.ticker, side=Side.BUY, quantity=order_qty, price=cur_p)
+                        fill = bot.gauntlet.submit_bracket_order(
+                            order=order,
+                            stop_loss=sl_calc,
+                            take_profit=tp_calc,
+                            trailing_stop_pct=bot.config.trailing_stop_pct,
+                        )
+                        bot.log("ORDER_BUY", f"Manual BUY {fill.quantity} {feed.ticker} @ ${fill.fill_price:,.2f}", price=fill.fill_price)
+                        st.toast(f"✅ Filled BUY {fill.quantity} {feed.ticker} @ ${fill.fill_price:,.2f}", icon="🟢")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Order rejected: {e}")
+
         with col_b2:
             if st.button("🔴 CLOSE ALL", use_container_width=True):
-                if feed.ticker in bot.gauntlet.positions:
-                    pos = bot.gauntlet.positions[feed.ticker]
-                    bot.gauntlet.submit_order(
-                        TradeOrder(ticker=feed.ticker, side=Side.SELL, quantity=pos.quantity, price=cur_p, exit_reason="MANUAL")
-                    )
-                    bot.log("MANUAL", f"Closed {pos.quantity} {feed.ticker} @ ${cur_p:,.2f}", price=cur_p)
-                    st.toast(f"Closed {pos.quantity} {feed.ticker}", icon="🔴")
+                try:
+                    if feed.ticker in bot.gauntlet.positions:
+                        pos = bot.gauntlet.positions[feed.ticker]
+                        fill = bot.gauntlet.submit_order(
+                            TradeOrder(ticker=feed.ticker, side=Side.SELL, quantity=pos.quantity, price=cur_p, exit_reason="MANUAL")
+                        )
+                        bot.log("MANUAL", f"Closed {fill.quantity} {feed.ticker} @ ${fill.fill_price:,.2f}", price=fill.fill_price)
+                        st.toast(f"✅ Closed {fill.quantity} {feed.ticker}", icon="🔴")
+                        st.rerun()
+                    else:
+                        st.info(f"No open positions in {feed.ticker}.")
+                except Exception as e:
+                    st.error(f"❌ Close failed: {e}")
 
         if not st.session_state.live_streaming:
             if st.button("⏭ Step 1 Tick (Manual)", use_container_width=True):

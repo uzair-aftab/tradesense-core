@@ -129,3 +129,45 @@ def test_bot_trailing_stop_triggered():
 
     csv_data = bot.export_trades_csv()
     assert "TRAILING_STOP" in csv_data
+
+
+def test_bot_crypto_fractional_execution():
+    """Verify bot correctly calculates fractional position size when trading high-priced assets ($80k BTC) with $10k cash."""
+    df = _create_sample_df(40, start_price=80_000.0)
+    feed = LiveMarketFeed(ticker="BTC-USD", mode=StreamMode.HISTORICAL_REPLAY, base_df=df)
+    strategy = DummyBullishStrategy()
+    config = BotConfig(
+        symbol="BTC-USD",
+        initial_balance=10_000.0,  # $10,000 cash vs $80,000 BTC
+        risk_per_trade=0.02,       # $200 risk capital
+    )
+    bot = AutonomousSniperBot(feed=feed, strategy=strategy, config=config)
+    bot.arm()
+    bot.step()
+
+    # The bot must successfully enter a fractional position, not 0!
+    assert "BTC-USD" in bot.gauntlet.positions
+    pos = bot.gauntlet.positions["BTC-USD"]
+    assert pos.quantity > 0.0
+    assert pos.quantity < 1.0  # Fractional coin (e.g. ~0.025 to 0.11 BTC)
+    assert pos.market_value <= 10_000.0
+
+
+def test_live_feed_candle_aggregation():
+    """Verify ticks update the current candle and open new candles with continuous prices."""
+    feed = LiveMarketFeed(ticker="BTC-CAD", mode=StreamMode.SYNTHETIC_MICROSTRUCTURE, ticks_per_bar=4)
+    init_bars = len(feed.streaming_df)
+
+    # First 3 ticks should update the current bar without creating a new row
+    for _ in range(3):
+        feed.next_tick()
+    assert len(feed.streaming_df) == init_bars
+
+    # 4th tick should complete the bar and create a new bar
+    feed.next_tick()
+    assert len(feed.streaming_df) == init_bars + 1
+
+    # Check continuity: new bar Open == previous bar Close
+    prev_close = feed.streaming_df["Close"].iloc[-2]
+    new_open = feed.streaming_df["Open"].iloc[-1]
+    assert new_open == pytest.approx(prev_close, rel=1e-5)

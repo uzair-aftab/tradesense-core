@@ -1,7 +1,7 @@
 # TradeSense Institutional System — Master AI Agent Operating Manual (`AGENT.md`)
 
 > **Target Audience**: Autonomous Agentic Coding AIs (Google Antigravity, Anthropic Claude Code, Cursor, Cline, Devin, SWE-bench) and Quantitative Engineers.
-> **Current Version**: `v2.0.0-institutional`  
+> **Current Version**: `v2.1.0-institutional`  
 > **Platform**: Windows / Python 3.12+ (Virtualenv: `c:\Python Virtual Environments\Personal Projects\TradeSense`)  
 > **Repository Path**: `c:\Python Virtual Environments\Personal Projects\Trading`  
 > **Hardware Acceleration**: NVIDIA GeForce RTX 4070 Laptop GPU (CUDA 12.4 / PyTorch 2.6.0)
@@ -23,8 +23,8 @@ TradeSense is an institutional-grade algorithmic trading, probabilistic machine 
          ▼                                         ▼
 [AIEngine (Probabilistic Quantiles)]    [LiveMarketFeed & Microstructure]
   • Softplus Monotonic LSTM              • Synthetic Jump-Diffusion Whale Flow
-  • Monotonic Gradient Boosted Trees     • High-Speed Historical Replay
-  • Calibrated Stacking Meta-Learner     • Tick-by-Tick Stream Generator
+  • Monotonic Gradient Boosted Trees     • Forming Candle Aggregation (5 ticks/bar)
+  • Calibrated Stacking Meta-Learner     • Continuous Candle Opens (Open = Prev Close)
          │                                         │
          └────────────────────┬────────────────────┘
                               ▼
@@ -38,20 +38,21 @@ TradeSense is an institutional-grade algorithmic trading, probabilistic machine 
                               ▼
                  [Autonomous Sniper Bot]
                    • Live tick-by-tick evaluation
+                   • Fractional position sizing (Crypto / Equities)
                    • Dynamic ratcheting trailing stops
                    • Intra-bar polarity execution
-                   • Institutional position sizing (2% risk)
                               │
                               ▼
                  [Gauntlet Execution Simulator]
+                   • Float-precision order fills & position tracking
                    • Slippage & Commission modeling
                    • Mark-to-market PnL tracking
-                   • Portfolio metrics (Sharpe, Calmar, Max Drawdown)
                               │
                               ▼
                  [Streamlit Live Cockpit (@st.fragment)]
-                   • Real-time ticking charts (2s loop)
-                   • Microstructure Terminal & Whale Radar
+                   • Category x-axis live charts (no time gaps)
+                   • USD Amount & Fractional unit order entry
+                   • Graceful cash validation (no unhandled tracebacks)
 ```
 
 ---
@@ -69,18 +70,27 @@ TradeSense is an institutional-grade algorithmic trading, probabilistic machine 
      $$y_{50} = \text{base}, \quad y_{10} = y_{50} - \text{softplus}(\Delta_{10}), \quad y_{90} = y_{50} + \text{softplus}(\Delta_{90})$$
    - Monotonicity rate must verify at 100.0% on every build.
 
-3. **Intra-Bar Candle Polarity Execution Order**:
+3. **Fractional Position Sizing for Multi-Asset Universes**:
+   - High-priced assets (e.g. Bitcoin at $80,000+) MUST support fractional quantities (`float`).
+   - Never cast order quantity to `int()` without a minimum fraction fallback, as `int(10000 / 80000)` truncates to `0`.
+   - Orders must be sized against available cash, supporting both USD capital allocation and fractional units.
+
+4. **Continuous Candle Aggregation**:
+   - Ticks must update the active forming candle.
+   - When a bar completes, the new bar MUST open at `Open = Previous_Bar.Close` to prevent artificial disconnected gaps.
+
+5. **Intra-Bar Candle Polarity Execution Order**:
    - Never evaluate High and Low simultaneously without respecting candle polarity:
      - **Bullish Bar** ($Close \ge Open$): Order is $Open \to Low \to High \to Close$. Evaluate stop-loss against the Low *before* evaluating take-profit against the High.
      - **Bearish Bar** ($Close < Open$): Order is $Open \to High \to Low \to Close$. Evaluate take-profit/ratchet stop against the High *before* evaluating stop-loss against the Low.
 
-4. **Dynamic Trailing Stop Ratchet**:
+6. **Dynamic Trailing Stop Ratchet**:
    - Trailing stops can only ever ratchet *in the profitable direction*. Once increased, a trailing stop floor must NEVER decrease.
 
-5. **Asymmetric Risk-to-Reward Filter**:
+7. **Asymmetric Risk-to-Reward Filter**:
    - Sniper execution requires: $\text{Reward-to-Risk Ratio} \ge 1.5\text{x}$ and $\text{Strategy Confidence} \ge 70\%$.
 
-6. **Non-Blocking UI Streaming**:
+8. **Non-Blocking UI Streaming**:
    - Never use full-page `st.rerun()` loops for live streaming.
    - Use `@st.fragment(run_every="2s")` so the live market updates smoothly without interfering with sidebar widgets or tab inputs.
 
