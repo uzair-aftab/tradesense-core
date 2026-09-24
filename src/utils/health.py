@@ -39,16 +39,29 @@ class HealthCheck:
             return {"available": False, "device_count": 0, "device_name": "N/A (torch not installed)"}
 
     @staticmethod
-    def check_models() -> Dict[str, bool]:
+    def check_models(tag: str = "latest") -> Dict[str, bool]:
         """Check if trained model files exist."""
         model_dir = config.MODELS_DIR
-        files = {
-            "lstm": model_dir / "lstm_quantile.pt",
-            "xgb_p10": model_dir / "xgb_quantile" / "p10.json",
-            "xgb_p50": model_dir / "xgb_quantile" / "p50.json",
-            "xgb_p90": model_dir / "xgb_quantile" / "p90.json",
-        }
-        return {name: path.exists() for name, path in files.items()}
+        candidate_dirs = [model_dir / tag, model_dir]
+        if model_dir.exists():
+            for child in model_dir.iterdir():
+                if child.is_dir() and child not in candidate_dirs:
+                    candidate_dirs.append(child)
+
+        for target_dir in candidate_dirs:
+            if not target_dir.exists():
+                continue
+            files = {
+                "lstm": target_dir / "lstm_quantile.pt",
+                "xgb_p10": target_dir / "xgb_quantile" / "p10.json",
+                "xgb_p50": target_dir / "xgb_quantile" / "p50.json",
+                "xgb_p90": target_dir / "xgb_quantile" / "p90.json",
+            }
+            results = {name: path.exists() for name, path in files.items()}
+            if any(results.values()):
+                return results
+
+        return {"lstm": False, "xgb_p10": False, "xgb_p50": False, "xgb_p90": False}
 
     @staticmethod
     def check_api_keys() -> Dict[str, bool]:

@@ -80,6 +80,7 @@ secrets/
 # -----------------
 data/cache.db
 data/*.db
+data/*.json
 *.sqlite3
 *.db
 cache/
@@ -94,7 +95,7 @@ logs/
 # -----------------
 # ML Models (large files)
 # -----------------
-models/
+/models/
 *.pt
 *.pth
 *.pkl

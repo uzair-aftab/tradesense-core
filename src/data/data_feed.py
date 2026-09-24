@@ -39,6 +39,13 @@ import pandas as pd
 import pandas_ta as ta
 import yfinance as yf
 from sklearn.preprocessing import MinMaxScaler
+import sys
+from pathlib import Path
+
+# Ensure project root is on path
+_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
 from src.data.cache import DataCache
 from src.utils.logger import get_logger
@@ -374,6 +381,78 @@ class DataLake:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: self.pipeline(ticker, timeframe, lookback, **kwargs))
 
+    def scan_watchlist(
+        self,
+        tickers: List[str],
+        timeframe: Timeframe = "1d",
+        lookback: str = "3mo",
+    ) -> pd.DataFrame:
+        """
+        Scan multiple tickers to produce an institutional radar matrix:
+        Price, 1-Bar Return %, Volatility, Whale Z-Score, Whale Alert,
+        Trend Regime, and Sentiment Score.
+        """
+        results: List[Dict[str, Any]] = []
+
+        for ticker in tickers:
+            try:
+                raw = self.fetch(ticker, timeframe, lookback)
+                if raw.empty or len(raw) < 5:
+                    continue
+
+                feat = self.engineer_features(raw, ticker=ticker, include_sentiment=False)
+                last_bar = feat.iloc[-1]
+                prev_bar = feat.iloc[-2]
+
+                price = float(last_bar["Close"])
+                prev_price = float(prev_bar["Close"])
+                change_pct = ((price - prev_price) / prev_price) * 100.0
+
+                # 20-period volatility / ATR %
+                atr = float(last_bar.get("ATR_14", 0.0))
+                vol_pct = (atr / price * 100.0) if price > 0 else 0.0
+
+                # Whale activity: maximum Z-score in the last 3 bars
+                recent_z = float(feat["Whale_Z"].tail(3).max()) if "Whale_Z" in feat.columns else 0.0
+                whale_alert = bool(feat["Whale_Flag"].tail(3).any()) if "Whale_Flag" in feat.columns else False
+
+                # Trend Regime: Fast vs Slow EMA
+                ema20 = float(feat["Close"].ewm(span=20, adjust=False).mean().iloc[-1])
+                ema50 = float(feat["Close"].ewm(span=50, adjust=False).mean().iloc[-1])
+                if price > ema20 > ema50:
+                    regime = "Strong Bullish"
+                elif price > ema20:
+                    regime = "Bullish"
+                elif price < ema20 < ema50:
+                    regime = "Strong Bearish"
+                elif price < ema20:
+                    regime = "Bearish"
+                else:
+                    regime = "Neutral"
+
+                # Sentiment score
+                sentiment_score = self._get_sentiment_score(ticker)
+
+                results.append({
+                    "Ticker": ticker,
+                    "Price": round(price, 2),
+                    "Change %": round(change_pct, 2),
+                    "Vol %": round(vol_pct, 2),
+                    "Whale Z": round(recent_z, 2),
+                    "Whale Alert": "🚨 WHALE" if whale_alert else "Normal",
+                    "Regime": regime,
+                    "Sentiment": round(sentiment_score, 2),
+                })
+            except Exception as exc:
+                logger.warning("Error scanning ticker %s: %s", ticker, exc)
+
+        if not results:
+            return pd.DataFrame()
+
+        scan_df = pd.DataFrame(results)
+        scan_df = scan_df.sort_values(by="Whale Z", ascending=False).reset_index(drop=True)
+        return scan_df
+
     # ══════════════════════════════════════════════════════════════════════
     #  PRIVATE — feature helpers
     # ══════════════════════════════════════════════════════════════════════
@@ -391,20 +470,23 @@ class DataLake:
         # Ichimoku Cloud
         ichi = ta.ichimoku(df["High"], df["Low"], df["Close"])
         if ichi is not None:
-            # ichimoku returns a tuple of (lines_df, span_df)
+            # ichimoku returns a tuple of (lines_df, span_df).
+            # span_df projects 26 periods into the future. Reindex strictly to df.index
+            # so no future phantom rows are added to df.
             if isinstance(ichi, tuple):
                 for part in ichi:
                     if part is not None and isinstance(part, pd.DataFrame) and not part.empty:
-                        # Avoid duplicate column names
-                        overlap = part.columns.intersection(df.columns)
+                        aligned = part.reindex(df.index)
+                        overlap = aligned.columns.intersection(df.columns)
                         if len(overlap):
-                            part = part.drop(columns=overlap)
-                        df = pd.concat([df, part], axis=1)
+                            aligned = aligned.drop(columns=overlap)
+                        df = pd.concat([df, aligned], axis=1)
             elif isinstance(ichi, pd.DataFrame) and not ichi.empty:
-                overlap = ichi.columns.intersection(df.columns)
+                aligned = ichi.reindex(df.index)
+                overlap = aligned.columns.intersection(df.columns)
                 if len(overlap):
-                    ichi = ichi.drop(columns=overlap)
-                df = pd.concat([df, ichi], axis=1)
+                    aligned = aligned.drop(columns=overlap)
+                df = pd.concat([df, aligned], axis=1)
 
         # MACD (12, 26, 9)
         macd = ta.macd(df["Close"], fast=12, slow=26, signal=9)
@@ -525,25 +607,50 @@ class DataLake:
             return self._score_finbert(headlines)
         return self._score_vader(headlines)
 
-    # ── headline scraping ──────────────────────────────────────────────
-
     @staticmethod
     def _scrape_headlines(ticker: str, max_items: int = 20) -> List[str]:
         """
-        Pull recent news headlines for *ticker* via yfinance.
+        Pull recent news headlines for *ticker* via Finnhub (if key present)
+        or yfinance fallback.
 
-        Returns up to *max_items* headline strings (no API key needed).
+        Returns up to *max_items* headline strings.
         """
+        headlines: List[str] = []
+
+        # 1. Try Finnhub first if API key is configured
+        try:
+            from src.config import config
+            if config.has_finnhub_key():
+                import finnhub
+                fc = finnhub.Client(api_key=config.FINNHUB_API_KEY)
+                today = datetime.now(timezone.utc).date()
+                from_date = (today - timedelta(days=7)).isoformat()
+                to_date = today.isoformat()
+                fh_news = fc.company_news(ticker, _from=from_date, to=to_date)
+                if fh_news:
+                    for item in fh_news[:max_items]:
+                        hl = item.get("headline")
+                        if hl:
+                            headlines.append(hl)
+                    if headlines:
+                        logger.debug("Fetched %d headlines from Finnhub for %s", len(headlines), ticker)
+                        return headlines
+        except Exception as exc:
+            logger.debug("Finnhub headline fetch error for %s: %s", ticker, exc)
+
+        # 2. Fallback to yfinance
         try:
             tkr = yf.Ticker(ticker)
             news = tkr.news
             if not news:
                 return []
-            headlines = [
-                item.get("title", "")
-                for item in news[:max_items]
-                if item.get("title")
-            ]
+            for item in news[:max_items]:
+                # Handle both yfinance 1.0 (item['content']['title']) and legacy (item['title'])
+                title = item.get("title")
+                if not title and isinstance(item.get("content"), dict):
+                    title = item["content"].get("title")
+                if title:
+                    headlines.append(title)
             return headlines
         except Exception as exc:
             logger.warning("Headline scrape error for %s: %s", ticker, exc)
@@ -709,6 +816,14 @@ class DataLake:
 # ║  Quick smoke-test (python -m src.data.data_feed)                       ║
 # ╚══════════════════════════════════════════════════════════════════════════╝
 if __name__ == "__main__":
+    import sys
+    from pathlib import Path
+    _root = str(Path(__file__).resolve().parent.parent.parent)
+    if _root not in sys.path:
+        sys.path.insert(0, _root)
+    if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
     lake = DataLake(sentiment_backend="vader")
 
     print("=" * 60)
