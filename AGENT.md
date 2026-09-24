@@ -107,6 +107,13 @@ TradeSense is an institutional-grade algorithmic trading, probabilistic machine 
     - Every tick during an armed session must stream a complete, self-contained JSON record to `data/bot_sessions/<session_id>.jsonl` containing market micro-state (price, bid, ask, spread, volume, whale flag), technical indicators (EMA, BB, RSI, ATR, VWAP), AI forecasts (P10/P50/P90), sub-strategy voting breakdown, order execution details, and portfolio equity.
     - Upon session completion or disarm, the session must automatically generate a machine-readable `_summary.json` and an executive `_report.md` debrief for post-trade AI learning and strategy optimization.
 
+12. **Regime-Aware Strategy Gating (Never Buy Range Ceilings)**:
+    - *Empirically proven in 1,071-tick live audit (see `RESEARCH_FINDINGS.md`)*: Breakout strategies (Donchian 20-bar highs) have positive expectancy in trending regimes ($ADX > 25$), but act as guaranteed capital-incinerators in range-bound regimes ($ADX \le 25$, 0% win rate across 9 trades when $BB\%B > 75\%$).
+    - Any meta-ensemble or bot executing orders MUST enforce regime gating:
+      - In **Ranging/Consolidation** ($ADX \le 25$): Suppress breakout buys. Never BUY when Bollinger Band %B $> 0.70$; never SELL when $BB\%B < 0.30$. Prioritize mean reversion.
+      - In **Trending** ($ADX > 25$): Suppress counter-trend mean reversion fades. Enable Donchian breakouts and Whale Flow in the trend direction.
+    - An automatic consecutive stop-loss halt (minimum 60-tick cooldown after 2 consecutive stop-outs) must be honored to eliminate tilt during regime shifts.
+
 ---
 
 ## 3. Environment & Key Commands
@@ -137,6 +144,7 @@ TradeSense is an institutional-grade algorithmic trading, probabilistic machine 
 ```
 Trading/
 ├── AGENT.md                       # This file (Master AI Agent operating manual)
+├── RESEARCH_FINDINGS.md           # Quant research post-mortems, multi-session empirical audit
 ├── .cursorrules                   # Cursor IDE rules and formatting standards
 ├── CLAUDE.md                      # Anthropic Claude Code developer manual
 ├── ARCHITECTURE.md                # System technical architecture and mathematical proofs

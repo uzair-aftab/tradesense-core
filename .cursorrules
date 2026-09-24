@@ -24,3 +24,10 @@
 - Every tick snapshot must include: market micro-context, technical indicators (EMA, BB, RSI, ATR, VWAP), AI predictions, sub-strategy voting breakdown, order execution details, and portfolio equity.
 - On timer expiration or disarm, always finalize with _summary.json and executive Markdown report.
 
+# 5. Regime-Aware Strategy Gating (Empirical Quant Invariants)
+- Refer to RESEARCH_FINDINGS.md for the authoritative 1,071-tick cross-session empirical audit.
+- In Ranging/Consolidation Regimes (ADX <= 25): Breakout strategies (Donchian) must be suppressed. Never BUY when Bollinger Band %B > 0.70; never SELL when %B < 0.30. Prioritize mean-reversion.
+- In Trending Regimes (ADX > 25): Suppress counter-trend mean reversion fades. Enable Donchian breakout and Whale Flow momentum in trend direction.
+- Enforce Consecutive Stop-Loss Circuit Breaker: Halt order entry for 60 ticks (5 minutes) after 2 consecutive stop-outs.
+
+
