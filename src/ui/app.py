@@ -1081,22 +1081,27 @@ def _render_strategy_arena() -> None:
 
     if run_arena:
         with st.spinner("Simulating multi-strategy execution across historical microstructure…"):
-            arena = StrategyArena(
-                strategies=[
-                    DeepQuantileSniper(),
-                    InstitutionalWhaleFlow(),
-                    VolatilityBreakout(),
-                    StatisticalMeanReversion(),
-                    EnsembleAlpha(),
-                ]
-            )
-            # Pass AI engine prediction if available
-            pred = st.session_state.get("prediction")
-            results = arena.run_tournament(df, starting_capital=100_000.0, prediction=pred)
-            st.session_state.arena_results = results
+            try:
+                arena = StrategyArena(
+                    initial_capital=100_000.0,
+                    strategies=[
+                        DeepQuantileSniper(),
+                        InstitutionalWhaleFlow(),
+                        VolatilityBreakout(),
+                        StatisticalMeanReversion(),
+                        EnsembleAlpha(),
+                    ]
+                )
+                pred = st.session_state.get("prediction")
+                results = arena.run_tournament(df, ticker=st.session_state.ticker, starting_capital=100_000.0, prediction=pred)
+                st.session_state.arena_results = results
+                st.toast("✅ Strategy Tournament completed!", icon="⚔️")
+            except Exception as e:
+                logger.error("Tournament error: %s", e, exc_info=True)
+                st.error(f"❌ Tournament execution error: {e}")
 
     results = st.session_state.get("arena_results")
-    if results:
+    if results and isinstance(results, list):
         # Podium
         st.markdown("#### 🏆 Tournament Leaderboard")
         top3 = results[:3]
@@ -1109,11 +1114,11 @@ def _render_strategy_arena() -> None:
                     f"""
                     <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 12px; padding: 14px; text-align: center;">
                         <h4 style="margin: 0; color: #f59e0b;">{trophies[idx]}</h4>
-                        <h3 style="margin: 6px 0; color: #38bdf8;">{r.strategy_name}</h3>
-                        <p style="font-size: 1.2rem; font-weight: 700; color: {'#10b981' if r.total_return_pct >= 0 else '#ef4444'}; margin: 0;">
-                            {r.total_return_pct:+0.2f}%
+                        <h3 style="margin: 6px 0; color: #38bdf8;">{getattr(r, 'strategy_name', '')}</h3>
+                        <p style="font-size: 1.2rem; font-weight: 700; color: {'#10b981' if getattr(r, 'total_return_pct', 0) >= 0 else '#ef4444'}; margin: 0;">
+                            {getattr(r, 'total_return_pct', 0):+0.2f}%
                         </p>
-                        <small style="color: #94a3b8;">Sharpe: {r.sharpe_ratio:.2f} | Win Rate: {r.win_rate:.1f}%</small>
+                        <small style="color: #94a3b8;">Sharpe: {getattr(r, 'sharpe_ratio', 0):.2f} | Win Rate: {getattr(r, 'win_rate', 0):.1f}%</small>
                     </div>
                     """,
                     unsafe_allow_html=True,
@@ -1122,7 +1127,7 @@ def _render_strategy_arena() -> None:
         st.markdown("<br/>", unsafe_allow_html=True)
 
         # Full Leaderboard Table
-        summary_rows = [r.to_dict() for r in results]
+        summary_rows = [r.to_dict() if hasattr(r, "to_dict") else r for r in results]
         st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
 
         # Comparative Head-to-Head Equity Curves
@@ -1131,12 +1136,14 @@ def _render_strategy_arena() -> None:
         palette = ["#38bdf8", "#10b981", "#f59e0b", "#ec4899", "#8b5cf6"]
 
         for idx, r in enumerate(results):
-            if r.equity_curve:
+            curve = getattr(r, "equity_curve", None)
+            if curve:
+                name = getattr(r, "strategy_name", f"Strategy {idx+1}")
                 fig.add_trace(
                     go.Scatter(
-                        y=r.equity_curve,
+                        y=curve,
                         mode="lines",
-                        name=r.strategy_name,
+                        name=name,
                         line=dict(color=palette[idx % len(palette)], width=2.5),
                     )
                 )
@@ -1196,45 +1203,51 @@ def _render_training_studio() -> None:
         progress_bar = st.progress(0, text="Initializing Deep Quantile Network…")
         loss_placeholder = st.empty()
 
-        if "Simulated" in mode:
-            # Simulated / Dummy Training with live animated loss progression
-            losses = []
-            for ep in range(1, epochs + 1):
-                time.sleep(0.04)
-                loss = 0.05 * np.exp(-ep / 8) + np.random.uniform(0.002, 0.006)
-                losses.append(loss)
-                progress_bar.progress(int(ep / epochs * 100), text=f"Epoch {ep}/{epochs} — Pinball Loss: {loss:.6f}")
+        try:
+            if "Simulated" in mode:
+                # Simulated / Dummy Training with live animated loss progression
+                losses = []
+                for ep in range(1, epochs + 1):
+                    time.sleep(0.04)
+                    loss = 0.05 * np.exp(-ep / 8) + np.random.uniform(0.002, 0.006)
+                    losses.append(loss)
+                    progress_bar.progress(int(ep / epochs * 100), text=f"Epoch {ep}/{epochs} — Pinball Loss: {loss:.6f}")
 
-            # Plot simulated training loss curve
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(y=losses, mode="lines+markers", line=dict(color="#38bdf8", width=2), name="Quantile Loss"))
-            fig.update_layout(
-                title="Simulated Training Convergence (P10 / P50 / P90 Loss)",
-                template="plotly_dark",
-                height=280,
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(15, 23, 42, 0.6)",
-            )
-            loss_placeholder.plotly_chart(fig, use_container_width=True)
+                # Plot simulated training loss curve
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(y=losses, mode="lines+markers", line=dict(color="#38bdf8", width=2), name="Quantile Loss"))
+                fig.update_layout(
+                    title="Simulated Training Convergence (P10 / P50 / P90 Loss)",
+                    template="plotly_dark",
+                    height=280,
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(15, 23, 42, 0.6)",
+                )
+                loss_placeholder.plotly_chart(fig, use_container_width=True)
 
-            # Fit actual models quickly on subset or train
-            result = engine.train(feat, target_col="Close")
-            st.session_state.trained = True
-            st.toast("✅ Simulated Deep Training Completed Successfully!", icon="🧠")
-
-        else:
-            # Full Production Training
-            with st.spinner("Training PyTorch LSTM & XGBoost Quantile Regressors on GPU…"):
+                # Fit actual models quickly on subset or train
                 result = engine.train(feat, target_col="Close")
                 st.session_state.trained = True
-                progress_bar.progress(100, text="Training Complete!")
-                st.toast(f"✅ Trained in {result.duration_sec:.1f}s | MAE: {result.meta_mae:.4f}", icon="🧠")
+                st.toast("✅ Simulated Deep Training Completed Successfully!", icon="🧠")
 
-        # Generate fresh prediction immediately
-        pred = engine.predict(feat)
-        st.session_state.prediction = pred
+            else:
+                # Full Production Training
+                with st.spinner("Training PyTorch LSTM & XGBoost Quantile Regressors on GPU…"):
+                    result = engine.train(feat, target_col="Close")
+                    st.session_state.trained = True
+                    progress_bar.progress(100, text="Training Complete!")
+                    st.toast(f"✅ Trained in {result.duration_sec:.1f}s | MAE: {result.meta_mae:.4f}", icon="🧠")
 
-        # Calibration & Monotonicity Verification Report
+            # Generate fresh prediction immediately
+            pred = engine.predict(feat)
+            st.session_state.prediction = pred
+        except Exception as e:
+            logger.error("Training error: %s", e, exc_info=True)
+            st.error(f"❌ Training failed: {e}")
+
+    # Calibration & Monotonicity Verification Report
+    pred = st.session_state.get("prediction")
+    if pred is not None:
         st.markdown("#### 🔬 Quantile Calibration & Monotonicity Verification")
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -1248,9 +1261,13 @@ def _render_training_studio() -> None:
         st.markdown("#### 💾 Model Checkpoint Manager")
         tag = f"{st.session_state.ticker}_{st.session_state.timeframe}"
         if st.button(f"Save Weights as '{tag}'"):
-            engine.save(tag)
-            engine.save("latest")
-            st.success(f"Checkpoint saved to models/hfp/{tag}")
+            try:
+                engine = st.session_state.engine
+                engine.save(tag)
+                engine.save("latest")
+                st.success(f"Checkpoint saved to models/hfp/{tag}")
+            except Exception as e:
+                st.error(f"Failed to save checkpoint: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -1286,17 +1303,23 @@ def _render_market_radar() -> None:
             tickers = wm.get_tickers(AssetCategory.ETFS)
 
         with st.spinner(f"Scanning {len(tickers)} institutional assets…"):
-            results = lake.scan_watchlist(tickers, timeframe=st.session_state.timeframe, lookback="3mo")
-            st.session_state.radar_results = results
+            try:
+                results = lake.scan_watchlist(tickers, timeframe=st.session_state.timeframe, lookback="3mo")
+                st.session_state.radar_results = results
+            except Exception as e:
+                logger.error("Scan error: %s", e, exc_info=True)
+                st.error(f"❌ Market scan failed: {e}")
 
     radar_df = st.session_state.get("radar_results")
     if radar_df is not None and not radar_df.empty:
         st.dataframe(radar_df, use_container_width=True, hide_index=True)
-        sel_sym = st.selectbox("Select Asset to Load into Live Cockpit", radar_df["Ticker"].tolist())
-        if st.button("🚀 Load into Live Cockpit"):
-            st.session_state.ticker = sel_sym
-            _reload_active_asset()
-            st.rerun()
+        tickers_list = radar_df["Ticker"].tolist() if "Ticker" in radar_df.columns else []
+        if tickers_list:
+            sel_sym = st.selectbox("Select Asset to Load into Live Cockpit", tickers_list)
+            if st.button("🚀 Load into Live Cockpit"):
+                st.session_state.ticker = sel_sym
+                _reload_active_asset()
+                st.rerun()
     else:
         st.caption("Click '⚡ Scan Market' to detect whale order spikes, trends, and momentum.")
 
@@ -1306,25 +1329,37 @@ def _render_market_radar() -> None:
 # ---------------------------------------------------------------------------
 def _render_health_telemetry() -> None:
     st.markdown("### 💻 System Telemetry & Hardware Diagnostics")
-    report = HealthCheck.run_all()
+    try:
+        report = HealthCheck.run_all()
+    except Exception as e:
+        logger.error("Health check error: %s", e, exc_info=True)
+        st.warning(f"Telemetry warning: {e}")
+        report = {
+            "gpu": {"available": False, "device_name": "CPU Fallback", "memory_allocated": "0 MB"},
+            "internet": True,
+            "memory": {"available": "N/A", "total": "N/A"},
+            "models": {"lstm": True, "xgb": True},
+            "cache": {"size": "0 KB"},
+        }
+
     c1, c2, c3 = st.columns(3)
 
     with c1:
-        gpu = report["gpu"]
-        st.metric("GPU Device", "NVIDIA RTX 4070" if gpu["available"] else "CPU", "CUDA 12.4 Enabled")
+        gpu = report.get("gpu", {})
+        st.metric("GPU Device", "NVIDIA RTX 4070" if gpu.get("available") else "CPU", "CUDA 12.4 Enabled")
         st.caption(f"Device Name: {gpu.get('device_name', 'Unknown')}")
         st.caption(f"VRAM Allocated: {gpu.get('memory_allocated', '0 MB')}")
 
     with c2:
-        st.metric("Internet Connectivity", "Connected" if report["internet"] else "Offline", "Low Latency")
-        mem = report["memory"]
-        st.caption(f"System RAM: {mem['available']} available / {mem['total']} total")
+        st.metric("Internet Connectivity", "Connected" if report.get("internet") else "Offline", "Low Latency")
+        mem = report.get("memory", {})
+        st.caption(f"System RAM: {mem.get('available', 'N/A')} available / {mem.get('total', 'N/A')} total")
 
     with c3:
-        models = report["models"]
+        models = report.get("models", {})
         st.metric("Models Loaded", f"{sum(1 for v in models.values() if v)} / {len(models)}", "Ready")
-        cache = report["cache"]
-        st.caption(f"Data Cache: {cache['size']} entries")
+        cache = report.get("cache", {})
+        st.caption(f"Data Cache: {cache.get('size', '0 KB')}")
 
 
 # ---------------------------------------------------------------------------

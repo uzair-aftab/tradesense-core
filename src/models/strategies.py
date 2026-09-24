@@ -426,15 +426,48 @@ class EnsembleAlpha(BaseStrategy):
 
 
 
+@dataclass
+class TournamentResult:
+    """Performance results for a single strategy in the tournament arena."""
+    strategy_name: str
+    total_return_pct: float
+    alpha_pct: float
+    sharpe_ratio: float
+    max_drawdown_pct: float
+    win_rate: float
+    profit_factor: float
+    total_trades: int
+    final_equity: float
+    equity_curve: List[float] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "Strategy": self.strategy_name,
+            "Return %": f"{self.total_return_pct:+0.2f}%",
+            "Alpha %": f"{self.alpha_pct:+0.2f}%",
+            "Sharpe": f"{self.sharpe_ratio:.2f}",
+            "Win Rate %": f"{self.win_rate:.1f}%",
+            "Max DD %": f"{self.max_drawdown_pct:.2f}%",
+            "Profit Factor": f"{self.profit_factor:.2f}",
+            "Total Trades": self.total_trades,
+            "Equity ($)": f"${self.final_equity:,.2f}",
+        }
+
+
 class StrategyArena:
     """
     Tournament arena for backtesting and ranking all institutional strategies
     head-to-head on the active asset.
     """
 
-    def __init__(self, initial_capital: float = 100000.0):
-        self.initial_capital = initial_capital
-        self.strategies: List[BaseStrategy] = [
+    def __init__(
+        self,
+        initial_capital: float = 100000.0,
+        strategies: Optional[List[BaseStrategy]] = None,
+        **kwargs: Any,
+    ):
+        self.initial_capital = kwargs.get("starting_capital", initial_capital)
+        self.strategies: List[BaseStrategy] = strategies or [
             DeepQuantileSniper(),
             InstitutionalWhaleFlow(),
             VolatilityBreakout(),
@@ -447,21 +480,24 @@ class StrategyArena:
         df: pd.DataFrame,
         ticker: str = "ASSET",
         prediction: Optional[QuantilePrediction] = None,
-    ) -> pd.DataFrame:
+        starting_capital: Optional[float] = None,
+        **kwargs: Any,
+    ) -> List[TournamentResult]:
         """
-        Execute parallel backtests of all strategies and return a ranked leaderboard.
+        Execute parallel backtests of all strategies and return a ranked list of TournamentResult.
         """
-        results: List[Dict[str, Any]] = []
+        results: List[TournamentResult] = []
 
         if df.empty or len(df) < 30:
-            return pd.DataFrame()
+            return results
 
+        cap = starting_capital or kwargs.get("initial_capital", self.initial_capital)
         close_prices = df["Close"].values
         benchmark_return = ((close_prices[-1] - close_prices[0]) / close_prices[0]) * 100.0
 
         for strat in self.strategies:
             sim = Gauntlet(
-                starting_capital=self.initial_capital,
+                starting_capital=cap,
                 slippage_range=(0.0001, 0.0005),
                 commission_flat=1.00,
                 commission_pct=0.001,
@@ -500,24 +536,41 @@ class StrategyArena:
                 sim.mark_to_market({ticker: close_prices[-1]})
 
             m = sim.metrics
-            strat_ret = ((m.total_equity - self.initial_capital) / self.initial_capital) * 100.0
+            strat_ret = ((m.total_equity - cap) / cap) * 100.0
             alpha = strat_ret - benchmark_return
 
-            results.append({
-                "Strategy": strat.name,
-                "Return %": round(strat_ret, 2),
-                "Alpha %": round(alpha, 2),
-                "Sharpe": round(m.sharpe_ratio, 2),
-                "Max DD %": round(m.max_drawdown_pct, 2),
-                "Win Rate %": round(m.win_rate * 100, 1),
-                "Profit Factor": round(m.profit_factor, 2),
-                "Total Trades": m.total_trades,
-                "Equity ($)": round(m.total_equity, 2),
-            })
+            results.append(
+                TournamentResult(
+                    strategy_name=strat.name,
+                    total_return_pct=round(strat_ret, 2),
+                    alpha_pct=round(alpha, 2),
+                    sharpe_ratio=round(m.sharpe_ratio, 2),
+                    max_drawdown_pct=round(m.max_drawdown_pct, 2),
+                    win_rate=round(m.win_rate * 100, 1),
+                    profit_factor=round(m.profit_factor, 2),
+                    total_trades=m.total_trades,
+                    final_equity=round(m.total_equity, 2),
+                    equity_curve=list(sim._equity_curve),
+                )
+            )
 
-        board = pd.DataFrame(results)
         # Rank by Sharpe Ratio, then Return
-        board = board.sort_values(by=["Sharpe", "Return %"], ascending=False).reset_index(drop=True)
-        board.index = board.index + 1  # 1-based rank
+        results.sort(key=lambda r: (r.sharpe_ratio, r.total_return_pct), reverse=True)
+        return results
+
+    def run_tournament_df(
+        self,
+        df: pd.DataFrame,
+        ticker: str = "ASSET",
+        prediction: Optional[QuantilePrediction] = None,
+        starting_capital: Optional[float] = None,
+        **kwargs: Any,
+    ) -> pd.DataFrame:
+        """Convenience method returning tournament results as a formatted DataFrame."""
+        results = self.run_tournament(df, ticker=ticker, prediction=prediction, starting_capital=starting_capital, **kwargs)
+        if not results:
+            return pd.DataFrame()
+        board = pd.DataFrame([r.to_dict() for r in results])
+        board.index = board.index + 1
         board.index.name = "Rank"
         return board
