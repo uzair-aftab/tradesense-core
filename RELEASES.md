@@ -4,6 +4,40 @@ This document records the state of the TradeSense project across major releases,
 
 ---
 
+## Release `v2.1.1` — EnsembleAlpha Bugfix, Category Axis Monolith Collapse Fix & Volume Calibration
+
+- **Date**: 2026-09-24
+- **Branch**: `overhaul/tradesense-best`
+- **Scope**: Signal Engine Bugfix, Plotly Category Collision Resolution, and Tick Volume Calibration
+
+### Project State
+Directly fixes two high-visibility bugs reported by the user: (1) an unhandled `NameError: name 'price' is not defined` inside `EnsembleAlpha.generate_signal()`, and (2) a Plotly category axis collapse bug where daily bars all sharing timestamp `00:00:00` collapsed into a single vertical monolith with 2 Trillion volume. All 32 unit tests now pass cleanly.
+
+### Key Features & Fixes Added
+1. **`EnsembleAlpha.generate_signal()` Price Resolution (`src/models/strategies.py`)**:
+   - Explicitly defined `price = float(df["Close"].iloc[current_idx]) if not df.empty else 100.0`.
+   - Restored autonomous bot signal generation and eliminated fatal Streamlit fragment crashes.
+2. **Guaranteed Unique Category Axis Formatting (`src/ui/app.py`)**:
+   - Built `_format_chart_time_labels()` that inspects timestamps and dynamically formats daily bars as `%b %d` and intraday bars as `%H:%M:%S`.
+   - Appends collision disambiguators (`#2`, `#3`) for any identical time stamps, guaranteeing Plotly never stacks multiple candles into a single monolithic category.
+3. **Decoupled Microstructure Baseline & Volume Calibration (`src/data/live_feed.py`)**:
+   - In `SYNTHETIC_MICROSTRUCTURE` mode, `LiveMarketFeed` now creates a clean intraday baseline ending right at the current timestamp, rather than appending sub-minute ticks onto multi-month daily bars.
+   - Scaled tick and candle volumes realistically: crypto assets (BTC, ETH, SOL) produce realistic fractional volumes (0.05 to 1.8 BTC per tick, 2 to 18 BTC per bar) instead of multi-thousand lots that blew up chart volume into trillions.
+4. **Clean Stream Mode Switching**:
+   - Added `LiveMarketFeed.mode` property setter that automatically re-initializes data streams when toggling between Synthetic Microstructure and Historical Replay.
+5. **Regression Unit Tests (`tests/test_bot.py`)**:
+   - Added `test_ensemble_alpha_no_name_error`, `test_live_feed_mode_switch`, and `test_chart_time_label_uniqueness`. Test suite expanded to 32 tests passing.
+
+### Pros & Cons
+- **Pros**:
+  - Eliminates the `NameError` crash completely; the bot executes autonomous entries reliably.
+  - Candlestick chart renders perfectly spaced, clean candles with crisp OHLC bars and realistic volume bars.
+  - Zero collision between daily historical data and live intraday ticks.
+- **Cons & Trade-offs**:
+  - Switching between Historical Replay and Synthetic Microstructure re-initializes the active chart buffer to maintain time-scale consistency.
+
+---
+
 ## Release `v2.1.0` — Institutional Execution Hardening, Fractional Sizing & Professional Candle Aggregation
 
 - **Date**: 2026-09-24

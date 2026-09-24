@@ -1,7 +1,7 @@
 # TradeSense Institutional System — Master AI Agent Operating Manual (`AGENT.md`)
 
 > **Target Audience**: Autonomous Agentic Coding AIs (Google Antigravity, Anthropic Claude Code, Cursor, Cline, Devin, SWE-bench) and Quantitative Engineers.
-> **Current Version**: `v2.1.0-institutional`  
+> **Current Version**: `v2.1.1-institutional`  
 > **Platform**: Windows / Python 3.12+ (Virtualenv: `c:\Python Virtual Environments\Personal Projects\TradeSense`)  
 > **Repository Path**: `c:\Python Virtual Environments\Personal Projects\Trading`  
 > **Hardware Acceleration**: NVIDIA GeForce RTX 4070 Laptop GPU (CUDA 12.4 / PyTorch 2.6.0)
@@ -25,6 +25,7 @@ TradeSense is an institutional-grade algorithmic trading, probabilistic machine 
   • Softplus Monotonic LSTM              • Synthetic Jump-Diffusion Whale Flow
   • Monotonic Gradient Boosted Trees     • Forming Candle Aggregation (5 ticks/bar)
   • Calibrated Stacking Meta-Learner     • Continuous Candle Opens (Open = Prev Close)
+         │                               • Realistic Volume Scaling (Crypto vs Equities)
          │                                         │
          └────────────────────┬────────────────────┘
                               ▼
@@ -50,7 +51,7 @@ TradeSense is an institutional-grade algorithmic trading, probabilistic machine 
                               │
                               ▼
                  [Streamlit Live Cockpit (@st.fragment)]
-                   • Category x-axis live charts (no time gaps)
+                   • Category x-axis live charts with collision-free labels
                    • USD Amount & Fractional unit order entry
                    • Graceful cash validation (no unhandled tracebacks)
 ```
@@ -94,6 +95,13 @@ TradeSense is an institutional-grade algorithmic trading, probabilistic machine 
    - Never use full-page `st.rerun()` loops for live streaming.
    - Use `@st.fragment(run_every="2s")` so the live market updates smoothly without interfering with sidebar widgets or tab inputs.
 
+9. **Category Axis Label Uniqueness in Plotly**:
+   - In Plotly candlestick charts configured with `type="category"`, bars sharing an identical x-axis string label will collapse into a single bin, stacking OHLC bodies and summing their volume into a trillion-dollar monolith.
+   - Labels must be context-aware (`%b %d` for daily bars, `%H:%M:%S` for intraday bars) and guaranteed unique via `seen` tracking (`#2`, `#3`) to prevent collapse.
+
+10. **Signal Target/Stop Price Resolution**:
+    - Any strategy or meta-ensemble generating dynamic target or stop orders must always resolve the reference price from the active dataframe (`price = float(df["Close"].iloc[current_idx])`) before evaluating fallback percentages to prevent `NameError` crashes.
+
 ---
 
 ## 3. Environment & Key Commands
@@ -104,7 +112,7 @@ TradeSense is an institutional-grade algorithmic trading, probabilistic machine 
 
 ### Essential Commands
 ```powershell
-# Run full unit test suite (26 tests)
+# Run full unit test suite (32 tests)
 & "C:\Python Virtual Environments\Personal Projects\TradeSense\Scripts\python.exe" -m pytest tests/ -v
 
 # Run targeted test file

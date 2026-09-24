@@ -1,29 +1,20 @@
-# TradeSense Cursor IDE Operating Rules (.cursorrules)
+# TradeSense Institutional System — Cursor AI Operating Rules (.cursorrules)
+# Applies to: Cursor, Windsurf, GitHub Copilot, and Cline
 
-# Project Context
-You are working on TradeSense, a world-class institutional algorithmic trading platform built in Python 3.12, PyTorch (CUDA 12.4), and Streamlit.
+# 1. Environment & Execution
+- Virtual Environment: C:\Python Virtual Environments\Personal Projects\TradeSense\Scripts\python.exe
+- Test Suite: Always verify with `python -m pytest tests/ -v`
+- App Launch: `streamlit run src/ui/app.py`
 
-# Virtual Environment & Python Path
-- Virtual environment path: `C:\Python Virtual Environments\Personal Projects\TradeSense\Scripts\python.exe`
-- Always use the above Python executable when running commands, pytest, or streamlit.
-- Windows environment: Use raw strings `r"..."` or forward slashes `/` when formulating markdown file links and regex patterns.
+# 2. Financial & Microstructure Domain Invariants
+- Zero Lookahead Bias: Always construct forward targets via df["Close"].shift(-1). Never calculate predictive features on contemporaneous or future bars.
+- Mathematical Monotonicity: Quantile predictions must guarantee P10 <= P50 <= P90 at 100% rate using softplus positive offsets.
+- Fractional Multi-Asset Sizing: High-priced assets (BTC, ETH) must use fractional float sizing (round to 4 decimals for price >= 1000). Never truncate order quantity to int(0).
+- Candlestick Chart Category Collision: When using Plotly category x-axis, all label strings must be uniquely formatted (_format_chart_time_labels) so bars never collapse into stacked monoliths.
+- Continuous Candle Aggregation: Ticks update active candle; completed bars hand off Open = previous Close.
+- Intra-bar Polarity: Bullish bars evaluate Stop-Loss at Low before Take-Profit at High. Bearish bars evaluate Take-Profit at High before Stop-Loss at Low.
+- Dynamic Trailing Stops: Trailing stop floors can only ratchet upwards for long positions; they must never decrease.
 
-# Coding Standards & Architecture Rules
-1. Zero Lookahead Bias:
-   - Always shift future targets: `df["Close"].shift(-1)`. Never use `df["Close"]` as its own target in the same row.
-2. Mathematical Quantile Monotonicity:
-   - Output monotonic quantiles via softplus offsets: `p10 = p50 - softplus(delta10)` and `p90 = p50 + softplus(delta90)`.
-   - Never allow quantiles to cross ($P_{10} \le P_{50} \le P_{90}$).
-3. Intra-Bar Execution Polarity:
-   - When evaluating OHLC bars, respect bar polarity:
-     - Bullish bar (Close >= Open): Open -> Low -> High -> Close.
-     - Bearish bar (Close < Open): Open -> High -> Low -> Close.
-4. Dynamic Trailing Stops:
-   - Trailing stop floors can only ratchet upwards (for long positions). Never decrease an active stop floor.
-5. Streamlit Live Performance:
-   - Never use recursive `st.rerun()` loops for live streaming.
-   - Use `@st.fragment(run_every="2s")` to isolate live streaming ticking without rerunning user controls.
-6. Documentation & Testing:
-   - All new features MUST have corresponding pytest tests in `tests/`.
-   - All tests must pass: `& "C:\Python Virtual Environments\Personal Projects\TradeSense\Scripts\python.exe" -m pytest tests/ -v`.
-   - Always update `AGENT.md`, `ARCHITECTURE.md`, and `RELEASES.md` when adding or modifying major features.
+# 3. Strategy & Signal Protocol
+- In any BaseStrategy implementation or ensemble, always resolve reference price: price = float(df["Close"].iloc[current_idx]) before computing percentage-based target/stop levels to avoid NameError.
+- Never block the UI with full-page st.rerun() loops. Always use @st.fragment(run_every="2s").
