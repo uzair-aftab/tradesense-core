@@ -1,0 +1,29 @@
+# TradeSense Cursor IDE Operating Rules (.cursorrules)
+
+# Project Context
+You are working on TradeSense, a world-class institutional algorithmic trading platform built in Python 3.12, PyTorch (CUDA 12.4), and Streamlit.
+
+# Virtual Environment & Python Path
+- Virtual environment path: `C:\Python Virtual Environments\Personal Projects\TradeSense\Scripts\python.exe`
+- Always use the above Python executable when running commands, pytest, or streamlit.
+- Windows environment: Use raw strings `r"..."` or forward slashes `/` when formulating markdown file links and regex patterns.
+
+# Coding Standards & Architecture Rules
+1. Zero Lookahead Bias:
+   - Always shift future targets: `df["Close"].shift(-1)`. Never use `df["Close"]` as its own target in the same row.
+2. Mathematical Quantile Monotonicity:
+   - Output monotonic quantiles via softplus offsets: `p10 = p50 - softplus(delta10)` and `p90 = p50 + softplus(delta90)`.
+   - Never allow quantiles to cross ($P_{10} \le P_{50} \le P_{90}$).
+3. Intra-Bar Execution Polarity:
+   - When evaluating OHLC bars, respect bar polarity:
+     - Bullish bar (Close >= Open): Open -> Low -> High -> Close.
+     - Bearish bar (Close < Open): Open -> High -> Low -> Close.
+4. Dynamic Trailing Stops:
+   - Trailing stop floors can only ratchet upwards (for long positions). Never decrease an active stop floor.
+5. Streamlit Live Performance:
+   - Never use recursive `st.rerun()` loops for live streaming.
+   - Use `@st.fragment(run_every="2s")` to isolate live streaming ticking without rerunning user controls.
+6. Documentation & Testing:
+   - All new features MUST have corresponding pytest tests in `tests/`.
+   - All tests must pass: `& "C:\Python Virtual Environments\Personal Projects\TradeSense\Scripts\python.exe" -m pytest tests/ -v`.
+   - Always update `AGENT.md`, `ARCHITECTURE.md`, and `RELEASES.md` when adding or modifying major features.
