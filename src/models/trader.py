@@ -348,7 +348,7 @@ class Gauntlet:
             self._save_portfolio()
 
         logger.info(
-            "%s %d %s @ $%.2f (slip=%.4f%%, comm=$%.2f, P&L=$%.2f)",
+            "%s %g %s @ $%.2f (slip=%.4f%%, comm=$%.2f, P&L=$%.2f)",
             fill.side.value,
             fill.quantity,
             fill.ticker,
