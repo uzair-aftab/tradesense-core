@@ -439,6 +439,7 @@ class TournamentResult:
     total_trades: int
     final_equity: float
     equity_curve: List[float] = field(default_factory=list)
+    trades: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -485,11 +486,21 @@ class StrategyArena:
     ) -> List[TournamentResult]:
         """
         Execute parallel backtests of all strategies and return a ranked list of TournamentResult.
+        Auto-engineers required technical indicators if not already present.
         """
         results: List[TournamentResult] = []
 
         if df.empty or len(df) < 30:
             return results
+
+        # Ensure required technical indicators exist
+        required_cols = {"Whale_Z", "VWAP", "ATR_14", "BB_Lower", "RSI_14"}
+        if not required_cols.issubset(df.columns):
+            try:
+                from src.data.data_feed import DataFeed
+                df = DataFeed().engineer_features(df.copy(), ticker=ticker, include_sentiment=False)
+            except Exception as e:
+                logger.warning("Could not auto-engineer features for tournament: %s", e)
 
         cap = starting_capital or kwargs.get("initial_capital", self.initial_capital)
         close_prices = df["Close"].values
@@ -551,6 +562,7 @@ class StrategyArena:
                     total_trades=m.total_trades,
                     final_equity=round(m.total_equity, 2),
                     equity_curve=list(sim._equity_curve),
+                    trades=[f.to_dict() for f in sim.fills],
                 )
             )
 

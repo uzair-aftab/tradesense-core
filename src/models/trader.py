@@ -224,6 +224,7 @@ class Gauntlet:
         risk_free_rate: float = 0.0,
         seed: Optional[int] = None,
         persist: bool = True,
+        user_id: Optional[int] = None,
     ):
         self.starting_capital = starting_capital
         self.cash = starting_capital
@@ -232,6 +233,7 @@ class Gauntlet:
         self.commission_pct = commission_pct
         self.risk_free_rate = risk_free_rate
         self.persist = persist
+        self.user_id = user_id
 
         self._rng = random.Random(seed)
         self.positions: Dict[str, Position] = {}
@@ -243,13 +245,17 @@ class Gauntlet:
         self._trailing_stops: Dict[str, Dict[str, float]] = {}  # ticker → {trail_pct, peak_price, stop_price}
         self._trade_notes: Dict[str, str] = {}     # order_id → note
 
-        # Try to load existing portfolio
+        # Load existing portfolio: DB if user_id given, else JSON fallback
         if persist:
-            self._load_portfolio()
+            if self.user_id is not None:
+                self._load_from_db()
+            else:
+                self._load_portfolio()
 
         logger.info(
-            "Gauntlet initialised: $%.2f  slip=[%.4f%%–%.4f%%]  comm=$%.2f/%.2f%%",
-            starting_capital,
+            "Gauntlet initialised: $%.2f (user_id=%s)  slip=[%.4f%%–%.4f%%]  comm=$%.2f/%.2f%%",
+            self.cash,
+            str(user_id),
             slippage_range[0] * 100,
             slippage_range[1] * 100,
             commission_flat,
@@ -350,6 +356,25 @@ class Gauntlet:
             exit_reason=order.exit_reason,
         )
         self.fills.append(fill)
+
+        # Persist trade fill to DB if user_id present
+        if self.user_id is not None:
+            try:
+                from src.data.database import get_database
+                db = get_database()
+                db.record_user_trade(
+                    user_id=self.user_id,
+                    order_id=fill.order_id,
+                    ticker=fill.ticker,
+                    side=fill.side.value,
+                    quantity=fill.quantity,
+                    fill_price=fill.fill_price,
+                    total_cost=fill.total_cost,
+                    pnl=fill.pnl,
+                    exit_reason=fill.exit_reason,
+                )
+            except Exception as e:
+                logger.warning("Could not persist trade fill to DB: %s", e)
 
         # Auto-save portfolio
         if self.persist:
@@ -843,6 +868,13 @@ class Gauntlet:
         self._take_profits.clear()
         self._trailing_stops.clear()
         self._trade_notes.clear()
+        if self.user_id is not None:
+            try:
+                from src.data.database import get_database
+                db = get_database()
+                db.reset_user_account(self.user_id)
+            except Exception as e:
+                logger.error("Failed to reset user account in db: %s", e)
         if self.persist:
             self._save_portfolio()
         logger.info("Gauntlet reset to $%.2f", self.starting_capital)
@@ -908,7 +940,36 @@ class Gauntlet:
     # ══════════════════════════════════════════════════════════════════════
 
     def _save_portfolio(self) -> None:
-        """Save portfolio state to JSON for persistence across restarts."""
+        """Save portfolio state to SQLite database (if user_id) and JSON for persistence."""
+        if self.user_id is not None:
+            try:
+                from src.data.database import get_database
+                db = get_database()
+                db.update_user_balance(self.user_id, self.cash)
+
+                # Upsert all active positions
+                for t, p in self.positions.items():
+                    ts = self._trailing_stops.get(t)
+                    db.save_user_position(
+                        user_id=self.user_id,
+                        ticker=t,
+                        quantity=p.quantity,
+                        avg_cost=p.avg_cost,
+                        current_price=p.current_price,
+                        stop_loss=self._stop_losses.get(t),
+                        take_profit=self._take_profits.get(t),
+                        trailing_stop_pct=ts["trail_pct"] if ts else None,
+                        trailing_stop_peak=ts["peak_price"] if ts else None,
+                    )
+
+                # Clean up any positions closed in memory from DB
+                existing_positions = db.get_user_positions(self.user_id)
+                for t in set(existing_positions.keys()) - set(self.positions.keys()):
+                    db.delete_user_position(self.user_id, t)
+            except Exception as e:
+                logger.error("Failed to save portfolio to DB for user %s: %s", self.user_id, e)
+
+        # JSON fallback
         try:
             state = {
                 "cash": self.cash,
@@ -929,7 +990,73 @@ class Gauntlet:
                 json.dump(state, f, indent=2, default=str)
             logger.debug("Portfolio saved → %s", PORTFOLIO_PATH)
         except Exception as e:
-            logger.error("Failed to save portfolio: %s", e)
+            logger.error("Failed to save portfolio to JSON: %s", e)
+
+    def _load_from_db(self) -> None:
+        """Load portfolio state from SQLite database for authenticated user."""
+        if self.user_id is None:
+            return
+        try:
+            from src.data.database import get_database
+            db = get_database()
+            user = db.get_user_by_id(self.user_id)
+            if user:
+                self.cash = float(user["cash_balance"])
+                self.starting_capital = float(user["starting_capital"])
+
+            # Load positions
+            db_positions = db.get_user_positions(self.user_id)
+            self.positions.clear()
+            for t, p in db_positions.items():
+                self.positions[t] = Position(
+                    ticker=p["ticker"],
+                    quantity=float(p["quantity"]),
+                    avg_cost=float(p["avg_cost"]),
+                    current_price=float(p["current_price"]),
+                )
+                if p.get("stop_loss"):
+                    self._stop_losses[t] = float(p["stop_loss"])
+                if p.get("take_profit"):
+                    self._take_profits[t] = float(p["take_profit"])
+                if p.get("trailing_stop_pct"):
+                    peak = float(p.get("trailing_stop_peak") or p["current_price"])
+                    pct = float(p["trailing_stop_pct"])
+                    self._trailing_stops[t] = {
+                        "trail_pct": pct,
+                        "peak_price": peak,
+                        "stop_price": peak * (1.0 - pct),
+                    }
+
+            # Load fills
+            self.fills.clear()
+            trades = db.get_user_trades(self.user_id, limit=100)
+            for tr in reversed(trades):
+                self.fills.append(
+                    Fill(
+                        order_id=tr["order_id"],
+                        ticker=tr["ticker"],
+                        side=Side.BUY if tr["side"] == "BUY" else Side.SELL,
+                        quantity=float(tr["quantity"]),
+                        intended_price=float(tr["fill_price"]),
+                        fill_price=float(tr["fill_price"]),
+                        commission=0.0,
+                        slippage_pct=0.0,
+                        total_cost=float(tr["total_cost"]),
+                        pnl=float(tr.get("pnl") or 0.0),
+                        exit_reason=tr.get("exit_reason") or "MANUAL",
+                        timestamp=tr.get("timestamp") or datetime.now(timezone.utc).isoformat(),
+                    )
+                )
+
+            # Initialize equity curve with current equity
+            self._equity_curve = [self.total_equity]
+            logger.info(
+                "User %d portfolio loaded from DB: $%.2f cash, %d positions, %d fills",
+                self.user_id, self.cash, len(self.positions), len(self.fills),
+            )
+        except Exception as e:
+            logger.error("Failed to load portfolio from DB for user %s: %s", self.user_id, e)
+            self._load_portfolio()
 
     def _load_portfolio(self) -> None:
         """Load portfolio state from JSON if it exists."""
