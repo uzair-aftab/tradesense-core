@@ -10,23 +10,25 @@
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                        TradeSense Live Trading Cockpit (src/ui/app.py)                │
+│               TradeSense Simplified Wealthsimple AI Cockpit (src/ui/app.py)            │
 │                                                                                        │
 │   ┌────────────────────────────────────────────────────────────────────────────────┐   │
-│   │  @st.fragment(run_every="2s") Live Stream Engine                               │   │
-│   │   • Live Ticker Ribbon (Flashing Price, Bid/Ask, Whale Alert, Portfolio PnL)   │   │
-│   │   • Real-Time Candlestick + Quantile Cloud (P10 / P50 / P90) + Dynamic Stops   │   │
-│   │   • Microstructure Execution Log (Order events, Whale spikes, Trailing stops)  │   │
-│   │   • One-Click Bracket Order Cockpit & Open Positions Monitor                   │   │
+│   │  ● TAB 1: WEALTHSIMPLE COCKPIT (@st.fragment 2s Live Stream)                   │   │
+│   │   • Quick Canadian Watchlist Bar (BTC-CAD→BTCC.TO, ETH-CAD→ETHX.TO, NVDA.NE)   │   │
+│   │   • Unified Account Equity & Realized Wealthsimple Profit Ribbon               │   │
+│   │   • Interactive Chart + AI P90/P10 Targets + Plotted WS Entry/Target/Stop      │   │
+│   │   • Unified Action Center: 1-Click Mobile Copy Blocks, Plain-English "Why",    │   │
+│   │     Active Position Monitor & Urgent Exit Alerts                               │   │
 │   └──────────────────────────────────────┬─────────────────────────────────────────┘   │
 │                                          │                                             │
-│   ┌────────────────────────┬─────────────┴───────────────┬─────────────────────────┐   │
-│   │ ⚔️ Strategy Arena      │ 🧪 Deep Learning Studio      │ 📡 Market Radar         │   │
-│   │  • 5 Quant Algorithms  │  • Real & Simulated Training │  • Multi-Asset Scanner  │   │
-│   │  • Leaderboard Podium  │  • Pinball Loss Convergence  │  • Whale Order Anomalies│   │
-│   │  • Head-to-Head Equity │  • Monotonicity Verification │  • 1-Click Cockpit Load │   │
-│   └────────────────────────┴─────────────────────────────┴─────────────────────────┘   │
+│   ┌──────────────────────────────────────┴──────┬──────────────────────────────────┐   │
+│   │ ◆ TAB 2: AI & STRATEGY LAB                  │ ◈ TAB 3: RADAR & TELEMETRY       │   │
+│   │  • Auto-Run 5-Strategy Tournament Podium    │  • Multi-Asset Canadian Scanner  │   │
+│   │  • Auto-Deployed Champion & Equity Curves   │  • Live RTX 4070 / 31.8GB RAM /  │   │
+│   │  • 10-Bar Quantile Cone & Optional Retrain  │    24-Core CPU & SQLite WAL      │   │
+│   └─────────────────────────────────────────────┴──────────────────────────────────┘   │
 └──────────────────────────────────────────┬─────────────────────────────────────────────┘
+```
                                            │
        ┌───────────────────────────────────┼───────────────────────────────────┐
        ▼                                   ▼                                   ▼

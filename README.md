@@ -1,124 +1,133 @@
-# TradeSense HFP
+---
+title: TradeSense — Institutional Quant & Wealthsimple Copier
+emoji: 💎
+colorFrom: blue
+colorTo: indigo
+sdk: streamlit
+sdk_version: 1.53.0
+app_file: src/ui/app.py
+pinned: false
+license: mit
+---
 
-> **High-Frequency Prediction & Paper Trading System** — An institutional-grade trading platform combining LSTM + XGBoost ensemble predictions with quantile output (P10/P50/P90), paper trading with realistic market friction, and GPU-accelerated sentiment analysis.
+# TradeSense v6
+
+> **Institutional Wealthsimple Alpha & AI Execution Platform** — Combines an 8-Model PyTorch Deep Learning & Machine Learning Quant Zoo with Split Conformal Calibration, Quarter-Kelly risk sizing, Net-EV alpha scanning, and a passwordless multi-user glass portal for Wealthsimple traders.
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![CUDA](https://img.shields.io/badge/CUDA-11.8-green.svg)](https://developer.nvidia.com/cuda-toolkit)
+[![PyTorch CUDA](https://img.shields.io/badge/PyTorch-CUDA%20Accelerated-green.svg)](https://pytorch.org/)
+[![Wealthsimple Ready](https://img.shields.io/badge/Wealthsimple-TSX%20%7C%20NEO%20%7C%20US%20%7C%20Crypto-cyan.svg)](https://www.wealthsimple.com/)
 
-## 🎯 Features
+---
 
-- **Hybrid AI Engine** — LSTM (temporal patterns) + XGBoost (feature importance) → Ridge meta-learner → P10/P50/P90 quantile output
-- **GPU Accelerated** — LSTM + FinBERT on CUDA (RTX 4070), XGBoost GPU training
-- **Paper Trading** — "The Gauntlet" simulator with slippage, commission, stop-loss, take-profit
-- **Whale Tracker** — Custom volume anomaly detector (z-score on rolling window)
-- **Sentiment Analysis** — FinBERT (GPU) with VADER fallback, normalised to [-1, 1]
-- **Data Caching** — SQLite TTL cache for API responses, eliminates redundant fetches
-- **Portfolio Persistence** — JSON state saves survive app restarts
+## 🎯 What's New in v6
+
+1. **Passwordless Multi-Account Profiles**:
+   - 1-Click Glass Login Gate with dedicated profiles for **Uzair** and **Waleed** + `＋ Add Account` option.
+   - Separate virtual ledgers, real Wealthsimple trade logs, and shareable URLs (`?user=uzair`, `?user=waleed`).
+
+2. **Interactive Chart Manipulation Suite**:
+   - Plotly Frosted-Glass Modebar with scroll-wheel zoom, box zoom, pan, trendline drawing, and snapshot export.
+   - Inline Glass Toolbar with `➕` / `➖` zoom buttons, viewport presets (`30B`, `60B`, `120B`, `All`), forecast horizons (`3B`, `5B`, `10B`, `20B`), chart styles (`Candles`, `Heikin-Ashi`, `Line`), and technical overlays (`EMA 9/21`, `VWAP`, `Bollinger Bands`, `S&R Zones`, `Volume Bars`).
+   - Dynamic Y-axis auto-scaling on visible bars.
+
+3. **8-Model ML/DL Quant Zoo & Custom Combinations**:
+   - **Attention-BiLSTM Net** (PyTorch Deep Learning Sequence Net)
+   - **Dilated TCN-ResNet** (Causal Dilated Convolutions & Skip Connections)
+   - **Multi-Head Transformer** (Temporal Self-Attention Transformer)
+   - **XGBoost Quantile Regressor** (Gradient Boosted Decision Trees with feature importances)
+   - **ExtraTrees + HistGBDT** (Randomized Quantile Forest)
+   - **RBF-SVR + Bayesian Ridge** (Kernel Regression & Analytical Uncertainty)
+   - **Kalman State-Space + GARCH** (Latent Drift Velocity & Volatility Clustering)
+   - **NLP Catalyst + Whale Flow** (Multimodal News Sentiment & Order Flow Imbalance)
+   - Presets (`Auto-Match DNA`, `Pure DL`, `Tree ML`, `All 8 Models`) or **Custom Model Selection** with `Walk-Forward`, `Ridge Stacking`, or `Uniform` blending.
+
+4. **Profit-Maximizing Institutional Stack**:
+   - **AlphaScanner**: Multi-asset Net Expected Value % ranking after Wealthsimple commission, spreads, and crypto fees.
+   - **PositionRiskSizer**: Mathematically optimal Quarter-Kelly allocations with strict max risk-at-stop caps and portfolio heat guards.
+   - **MarketHoursGuard**: Real-time Toronto market clock, limit-order execution shields, and Canadian TFSA/RRSP tax optimization advice.
+   - **TrailingStopRatchet**: Automated Breakeven locks and Chandelier trailing stops.
+
+5. **Verified End-to-End Wealthsimple Execution**:
+   - Real HTML5 `navigator.clipboard` copy cards for Limit Entry, Take Profit, Stop Loss, and Quantity.
+   - Fixed CAD proxy fee math (`BTCC.TO`, `ETHX-B.TO`, `NVDA.NE`) showing exact CAD saved.
+   - Live logged Wealthsimple trades monitor with realized P&L accounting.
+
+---
 
 ## 🚀 Quick Start
 
-### Prerequisites
-
-- Python 3.10+
-- NVIDIA GPU with CUDA 11.8 support (recommended)
-- Git
-
-### Installation
-
+### Local Setup
 ```bash
 # Clone the repository
 git clone https://github.com/uzair-aftab/tradesense.git
 cd tradesense
 
-# Create virtual environment
+# Create and activate virtual environment
 python -m venv venv
 ./venv/Scripts/Activate.ps1  # Windows PowerShell
-
-# Install PyTorch with CUDA support (FIRST)
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Copy environment template and add your API keys
-cp .env.example .env
-```
-
-### Running the App
-
-```bash
+# Run the app locally
 streamlit run src/ui/app.py
 ```
 
-## 📊 Watchlists
+### Free Live Shareable URL
 
-Default watchlists (5 per category, expandable):
+#### Option A: 24/7 Permanent Cloud URL (Free)
+1. **Streamlit Community Cloud**:
+   - Push code to GitHub: `https://github.com/uzair-aftab/tradesense`
+   - Go to [share.streamlit.io](https://share.streamlit.io), connect your repository, and select `src/ui/app.py`.
+2. **Hugging Face Spaces (Recommended for Heavy ML/DL)**:
+   - Create a free Space on [huggingface.co/new-space](https://huggingface.co/new-space) (16 GB RAM free tier).
+   - Link to your GitHub repo or push remote. The included Hugging Face YAML header configures everything automatically.
 
-| Category | Tickers |
-|----------|---------|
-| Canadian Stocks | RY.TO, TD.TO, SHOP.TO, ENB.TO, CNR.TO |
-| US Stocks | AAPL, MSFT, NVDA, GOOGL, AMZN |
-| ETFs | SPY, QQQ, XIU.TO, VFV.TO, ARKK |
-| Crypto (CAD) | BTC-CAD, ETH-CAD, SOL-CAD, ADA-CAD, AVAX-CAD |
-
-## 🛠️ Project Structure
-
+#### Option B: Live Laptop GPU Streaming Tunnel
+To share your local RTX 4070 GPU session with a friend in 3 seconds:
+```powershell
+./scripts/share_live_laptop.ps1
 ```
-tradesense/
-├── .agents/workflows/       # Agent runbooks (launch, develop)
-├── src/
-│   ├── config.py            # Central configuration
-│   ├── data/
-│   │   ├── data_feed.py     # DataLake — OHLCV + features + sentiment
-│   │   ├── cache.py         # SQLite TTL cache
-│   │   └── watchlists.py    # Managed asset lists
-│   ├── models/
-│   │   ├── ai_engine.py     # LSTM+XGB+Ridge ensemble
-│   │   └── trader.py        # Gauntlet paper trading simulator
-│   ├── ui/
-│   │   └── app.py           # Streamlit War Room dashboard
-│   └── utils/
-│       ├── logger.py        # Shared logging
-│       └── health.py        # System diagnostics
-├── data/                    # SQLite cache, paper portfolio (gitignored)
-├── models/hfp/              # Saved model weights (gitignored)
-├── logs/                    # Log files (gitignored)
-├── ARCHITECTURE.md          # System architecture reference
-├── requirements.txt         # Python dependencies
-└── README.md                # This file
-```
-
-## 🔧 Configuration
-
-Create a `.env` file based on `.env.example`:
-
-```env
-# API Keys (all optional - free tiers available)
-FINNHUB_API_KEY=your_key_here
-REDDIT_CLIENT_ID=your_client_id
-REDDIT_CLIENT_SECRET=your_client_secret
-
-# Engine Defaults
-LSTM_EPOCHS=50
-XGB_ESTIMATORS=500
-STARTING_CAPITAL=10000
-SENTIMENT_BACKEND=vader
-```
-
-## 📈 How It Works
-
-1. **Fetch** — Pull OHLCV data from yfinance (cached in SQLite)
-2. **Engineer** — Compute 20+ technical features (ADX, MACD, Ichimoku, ATR, BBWidth, OBV, VWAP, Whale Tracker)
-3. **Sentiment** — Score headlines via FinBERT (GPU) or VADER
-4. **Train** — LSTM (sequential patterns) + XGBoost (cross-sectional) → Ridge meta-blend
-5. **Predict** — Quantile output: P10 (conservative), P50 (likely), P90 (aggressive)
-6. **Trade** — Paper trade with realistic slippage, stop-loss, take-profit
-
-## ⚠️ Disclaimer
-
-This software is for educational and research purposes only. It is not financial advice. Always do your own research and consult with a qualified financial advisor before making investment decisions.
+This automatically starts a secure Cloudflare Quick Tunnel and outputs a live temporary HTTPS URL (e.g. `https://xxxx.trycloudflare.com`) with zero port forwarding or accounts required!
 
 ---
 
-*Built with ❤️ in Toronto, Canada*
+## 🏛️ Project Architecture
+
+```
+tradesense/
+├── .github/workflows/ci.yml       # Automated GitHub Actions CI pipeline
+├── scripts/
+│   └── share_live_laptop.ps1     # 1-click Cloudflare live tunnel for laptop
+├── src/
+│   ├── data/
+│   │   ├── database.py           # SQLite WAL persistence (profiles, virtual bot, real WS trades)
+│   │   ├── profiles.py           # Multi-account engine (Uzair, Waleed, +Add)
+│   │   ├── ws_catalog.py         # 173+ Wealthsimple asset catalog & fee schedules
+│   │   ├── data_feed.py          # DataLake OHLCV pipeline & whale volume tracker
+│   │   └── market_intel.py       # VADER + FinBERT sentiment & news catalyst feed
+│   ├── models/
+│   │   ├── model_zoo.py          # 8-Model ML/DL Quant Zoo & Conformal Calibrator
+│   │   ├── profit_engine.py      # AlphaScanner, Quarter-Kelly sizer, & trailing stop ratchet
+│   │   ├── adaptive_predictor.py # Dynamic heuristic consensus engine
+│   │   ├── regime.py             # Market regime classifier (Bull, Ranging, Bear)
+│   │   └── virtual_bot.py        # Proof-of-edge paper trading engine
+│   ├── ui/
+│   │   ├── app.py                # Obsidian frosted-glass cockpit & profile gate
+│   │   ├── chart_builder.py      # Plotly modebar, scroll zoom, & multi-indicator builder
+│   │   └── clipboard.py          # HTML5 1-click clipboard copy cards
+│   └── utils/
+│       ├── health.py             # Live GPU/CPU & RAM telemetry
+│       └── logger.py             # Structured logger
+├── tests/
+│   ├── test_overhaul_v5.py       # Core regression tests
+│   └── test_overhaul_v6.py       # v6 profiles, 8 models, profit engine, & zero-stub tests
+└── requirements.txt              # Cloud & CUDA ready dependencies
+```
+
+---
+
+## ⚖️ License
+MIT License. TradeSense is built for educational, quantitative research, and personal algorithmic trading purposes.
