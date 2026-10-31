@@ -4,9 +4,9 @@ TradeSense v7 — Setup GitHub Pages Gateway & Dedicated Tunnel Gist
 Creates:
   1. A dedicated public GitHub Gist ('TradeSense Live Tunnel Endpoint')
      containing 'tradesense_tunnel.json'.
-  2. A public repository 'uzair-aftab/trade-sense' on GitHub.
+  2. A public repository 'uzair-aftab/tradesense-gateway' on GitHub.
   3. Deploys the smart Slate-950 Gateway 'index.html' to GitHub Pages:
-     https://uzair-aftab.github.io/trade-sense/
+     https://uzair-aftab.github.io/tradesense-gateway/
 """
 
 import json
@@ -143,19 +143,19 @@ def setup_gist() -> str:
 
     config_data = {
         "tradesense_gist_id": gist_id,
-        "permanent_url": "https://uzair-aftab.github.io/trade-sense/",
+        "permanent_url": "https://uzair-aftab.github.io/tradesense-gateway/",
     }
     CONFIG_FILE.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
     return gist_id
 
 
 def setup_github_pages(gist_id: str):
-    print("[2/4] Ensuring GitHub Pages repository uzair-aftab/trade-sense exists...")
-    check = run_cmd(["gh", "repo", "view", "uzair-aftab/trade-sense"], check=False)
+    print("[2/4] Ensuring GitHub Pages repository uzair-aftab/tradesense-gateway exists...")
+    check = run_cmd(["gh", "repo", "view", "uzair-aftab/tradesense-gateway"], check=False)
     if check.returncode != 0:
-        print("       Creating repository uzair-aftab/trade-sense...")
+        print("       Creating repository uzair-aftab/tradesense-gateway...")
         run_cmd([
-            "gh", "repo", "create", "uzair-aftab/trade-sense",
+            "gh", "repo", "create", "uzair-aftab/tradesense-gateway",
             "--public",
             "--description", "TradeSense Institutional Quantitative Terminal Gateway",
         ])
@@ -165,7 +165,7 @@ def setup_github_pages(gist_id: str):
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmppath = Path(tmpdir)
-        run_cmd(["git", "clone", "https://github.com/uzair-aftab/trade-sense.git", str(tmppath)])
+        run_cmd(["git", "clone", "https://github.com/uzair-aftab/tradesense-gateway.git", str(tmppath)])
         (tmppath / "index.html").write_text(html_content, encoding="utf-8")
 
         run_cmd(["git", "config", "user.name", "Uzair Aftab"], cwd=str(tmppath))
@@ -176,23 +176,23 @@ def setup_github_pages(gist_id: str):
         if status_res.stdout.strip():
             run_cmd(["git", "commit", "-m", "Deploy TradeSense v7 Slate-950 Gateway"], cwd=str(tmppath))
             run_cmd(["git", "push", "origin", "main"], cwd=str(tmppath))
-            print("       Pushed updated index.html to uzair-aftab/trade-sense (main)")
+            print("       Pushed updated index.html to uzair-aftab/tradesense-gateway (main)")
         else:
             print("       index.html already up to date")
 
     print("[4/4] Verifying GitHub Pages configuration...")
-    pages_check = run_cmd(["gh", "api", "/repos/uzair-aftab/trade-sense/pages"], check=False)
+    pages_check = run_cmd(["gh", "api", "/repos/uzair-aftab/tradesense-gateway/pages"], check=False)
     if pages_check.returncode != 0:
         print("       Enabling GitHub Pages on branch 'main'...")
         run_cmd([
-            "gh", "api", "--method", "POST", "/repos/uzair-aftab/trade-sense/pages",
+            "gh", "api", "--method", "POST", "/repos/uzair-aftab/tradesense-gateway/pages",
             "-f", "source[branch]=main",
             "-f", "source[path]=/",
         ], check=False)
 
     print("\n" + "=" * 76)
     print("  TRADESENSE GATEWAY READY!")
-    print(f"  PERMANENT URL: https://uzair-aftab.github.io/trade-sense/")
+    print(f"  PERMANENT URL: https://uzair-aftab.github.io/tradesense-gateway/")
     print(f"  BACKING GIST:  https://gist.github.com/uzair-aftab/{gist_id}")
     print("=" * 76 + "\n")
 

@@ -14,7 +14,7 @@
 
 Access the live terminal from anywhere in the world using one permanent link:
 ```
-https://uzair-aftab.github.io/trade-sense/
+https://uzair-aftab.github.io/tradesense-gateway/
 ```
 - **Zero URL clutter**: Passwordless cookie-based authentication via `tradesense_session` (HMAC-SHA256, 90-day persistence). No `?user=uzair` or `?user=waleed` query string contamination.
 - **One-click account switching**: Dedicated isolated virtual portfolios for **Uzair** and **Waleed**, plus a 1-click `+ Create New Account` card.
@@ -82,7 +82,7 @@ This starts:
 1. TradeSense FastAPI server on `http://127.0.0.1:8010`
 2. Official Cloudflare HTTPS Quick Tunnel (`bin/cloudflared.exe`)
 3. Synchronizes the live tunnel URL to the dedicated GitHub Gist
-4. Surfaces the single permanent URL: `https://uzair-aftab.github.io/trade-sense/`
+4. Surfaces the single permanent URL: `https://uzair-aftab.github.io/tradesense-gateway/`
 
 ### Running Test Suite
 ```powershell
@@ -138,6 +138,6 @@ TradeSense/
 
 ## 🔒 Security & Privacy
 
-- **Private Repository**: Main codebase is maintained in a private repository (`uzair-aftab/tradesense`).
+- **Private Repository**: Main codebase is maintained in a private repository (`uzair-aftab/tradesense-core`).
 - **Public Gateway**: The public GitHub Pages repository (`uzair-aftab/trade-sense`) contains only the client-side gateway redirector (`index.html`) reading the public Gist.
 - **Zero Authentication Credential Leaks**: Session cookies are signed with a local HMAC-SHA256 secret.

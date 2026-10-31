@@ -26,7 +26,7 @@ PUBLIC_URL_FILE = BASE_DIR / "data" / "public_url.txt"
 GIST_PAYLOAD_FILE = BASE_DIR / "data" / "gist_payload.json"
 CONFIG_FILE = BASE_DIR / "data" / "friendly_urls.json"
 
-PERMANENT_FRIENDLY_URL = "https://uzair-aftab.github.io/trade-sense/"
+PERMANENT_FRIENDLY_URL = "https://uzair-aftab.github.io/tradesense-gateway/"
 PORT = 8010
 
 CLOUDFLARED_DOWNLOAD_URL = (
