@@ -1,46 +1,33 @@
 # ================================================================
-# HFP – High-Frequency Prediction & Paper Trading System
-# Python 3.10+ | CUDA 11.8 | Windows 11 | RTX 4070
-# ================================================================
-#
-# STEP 0 — Install PyTorch *first* with CUDA 11.8:
-#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-#
-# Then install everything else:
-#   pip install -r requirements.txt
+# TradeSense v6 — Wealthsimple AI Alpha & Execution Platform
+# Python 3.10+ | Linux & Windows Cloud Ready | PyTorch & CUDA Compatible
 # ================================================================
 
-# ----- Data Sources -----
-yfinance>=0.2.36
-finnhub-python>=2.4.19
-
-# ----- Technical Analysis -----
-pandas-ta>=0.3.14b0
-
-# ----- ML / AI -----
-scikit-learn>=1.4.0
+# ----- Deep Learning & ML -----
+torch>=2.2.0
 xgboost>=2.0.0
+scikit-learn>=1.4.0
+scipy>=1.11.0
 
-# ----- Sentiment Analysis (NLP) -----
-transformers>=4.40.0              # FinBERT (ProsusAI/finbert)
-vaderSentiment>=3.3.2             # VADER fallback sentiment
-
-# ----- Social / News APIs -----
-praw>=7.7.1
-requests>=2.31.0
-
-# ----- Async I/O -----
-aiohttp>=3.9.0
-
-# ----- UI -----
-streamlit>=1.31.0
-plotly>=5.18.0
-
-# ----- System -----
-psutil>=5.9.0
-
-# ----- Core -----
+# ----- Technical Analysis & Math -----
+pandas-ta>=0.4.67b0
 pandas>=2.2.0
 numpy>=1.26.0
+pytz>=2024.1
+
+# ----- Data Sources & Market Intel -----
+yfinance>=0.2.36
+vaderSentiment>=3.3.2
+transformers>=4.40.0
+requests>=2.31.0
+aiohttp>=3.9.0
+
+# ----- UI & Visualization -----
+streamlit>=1.40.0
+plotly>=5.20.0
+
+# ----- System, Telemetry & Testing -----
+psutil>=5.9.0
 python-dotenv>=1.0.0
 tqdm>=4.66.0
+pytest>=8.0.0

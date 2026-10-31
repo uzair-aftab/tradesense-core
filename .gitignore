@@ -135,3 +135,13 @@ temp/
 coverage.xml
 *.cover
 .hypothesis/
+
+# -----------------
+# TradeSense v6 Additions
+# -----------------
+scratch/
+tools/cloudflared*
+*.db-wal
+*.db-shm
+models/zoo/
+*.png
