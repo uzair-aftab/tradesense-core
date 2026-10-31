@@ -54,7 +54,7 @@ def _generate_ohlcv_data(n_bars: int = 80) -> pd.DataFrame:
 def test_strategy_arena_initialization():
     """Verify StrategyArena accepts default, positional, and keyword arguments."""
     arena1 = StrategyArena()
-    assert len(arena1.strategies) == 5
+    assert len(arena1.strategies) == 6
     assert arena1.initial_capital == 100_000.0
 
     strats = [DeepQuantileSniper(), VolatilityBreakout()]
@@ -136,7 +136,7 @@ def test_strategy_arena_run_tournament_df():
     df_board = arena.run_tournament_df(df, ticker="BTC-CAD")
     assert isinstance(df_board, pd.DataFrame)
     assert not df_board.empty
-    assert len(df_board) == 5
+    assert len(df_board) == 6
     assert "Strategy" in df_board.columns
     assert "Return %" in df_board.columns
     assert "Sharpe" in df_board.columns
