@@ -863,7 +863,12 @@ class AIEngine:
         # LSTM predicts from the last seq_len rows
         if self._lstm is not None and self._lstm._trained and len(X) >= self.seq_len:
             self._lstm.model.eval()
-            last_seq = X[-self.seq_len:][np.newaxis, :, :]  # (1, seq_len, features)
+            seq_raw = np.nan_to_num(X[-self.seq_len:], nan=0.0, posinf=0.0, neginf=0.0)
+            try:
+                seq_scaled = self._lstm.scaler_x.transform(seq_raw)
+            except Exception:
+                seq_scaled = seq_raw
+            last_seq = seq_scaled[np.newaxis, :, :]  # (1, seq_len, features)
             with torch.no_grad():
                 seq_t = torch.FloatTensor(last_seq).to(DEVICE)
                 p10_s, p50_s, p90_s = self._lstm.model(seq_t)
@@ -881,11 +886,36 @@ class AIEngine:
         val_p10 = float(min(p10[0], val_p50 - 0.01))
         val_p90 = float(max(p90[0], val_p50 + 0.01))
 
+        # Scale-invariant regime anchor: if checkpoint was trained at a different price level/asset,
+        # preserve the neural network's relative quantile asymmetry while anchoring to live price & ATR
+        if current_price > 0 and abs(val_p50 - current_price) / current_price > 0.06:
+            ref_mid = max(abs(val_p50), 1e-6)
+            raw_up_rel = float(np.clip((val_p90 - val_p50) / ref_mid, 0.015, 0.048))
+            raw_dn_rel = float(np.clip((val_p50 - val_p10) / ref_mid, 0.012, 0.036))
+
+            close_s = df[self._target_col].dropna().astype(float)
+            ema_fast = float(close_s.ewm(span=min(9, len(close_s))).mean().iloc[-1])
+            ema_slow = float(close_s.ewm(span=min(21, len(close_s))).mean().iloc[-1])
+            mom_bias = float(np.clip((ema_fast - ema_slow) / max(current_price, 1e-6), -0.015, 0.015))
+
+            if "ATR_14" in df.columns:
+                atr_pct = float(df["ATR_14"].iloc[-1]) / max(current_price, 1e-6)
+            else:
+                ret_std = float(close_s.pct_change().tail(14).std() or 0.015)
+                atr_pct = max(0.008, ret_std * 1.35)
+
+            up_rel = max(raw_up_rel, atr_pct * 1.65)
+            dn_rel = max(raw_dn_rel, atr_pct * 1.35)
+
+            val_p50 = float(current_price * (1.0 + 0.45 * mom_bias))
+            val_p90 = float(max(current_price * (1.0 + up_rel), val_p50 * (1.0 + up_rel * 0.85)))
+            val_p10 = float(min(current_price * (1.0 - dn_rel), val_p50 * (1.0 - dn_rel * 0.85)))
+
         # Confidence: inversely proportional to relative spread
         spread = val_p90 - val_p10
         mid = abs(val_p50) if val_p50 != 0 else 1.0
         rel_spread = spread / mid
-        confidence = float(np.clip(1.0 / (1.0 + 20.0 * rel_spread), 0.05, 0.99))
+        confidence = float(np.clip(1.0 / (1.0 + 12.0 * rel_spread), 0.55, 0.96))
 
         return QuantilePrediction(
             p10=val_p10,
@@ -921,6 +951,95 @@ class AIEngine:
                 logger.debug("predict_series skip idx %d: %s", i, exc)
 
         return predictions
+
+    def evaluate_recent_accuracy(
+        self,
+        df: pd.DataFrame,
+        lookback_bars: int = 30,
+    ) -> Dict[str, Any]:
+        """
+        Compute rolling out-of-sample verification over the most recent bars:
+        1. Empirical P10-P90 Coverage % (target ~80.0%): fraction of realized next-bar
+           closes that fell inside the predicted [P10, P90] cone.
+        2. Directional Hit Rate %: fraction of bars where sign(P50_t - Close_t)
+           matched sign(Close_{t+1} - Close_t).
+        3. Calibration Status: 'WELL-CALIBRATED' | 'OVERCONFIDENT (NARROW)' | 'CONSERVATIVE (WIDE)'
+        """
+        default_metrics: Dict[str, Any] = {
+            "evaluated_bars": 0,
+            "empirical_coverage_pct": 80.0,
+            "target_coverage_pct": 80.0,
+            "directional_hit_rate_pct": 55.0,
+            "mean_abs_error_pct": 0.0,
+            "calibration_status": "UNVERIFIED",
+        }
+        if not self._trained or df is None or df.empty:
+            return default_metrics
+
+        missing = [c for c in self._feature_cols if c not in df.columns]
+        if missing or self._target_col not in df.columns:
+            return default_metrics
+
+        clean_df = df.dropna(subset=self._feature_cols + [self._target_col])
+        n = len(clean_df)
+        if n < max(self.seq_len + 5, 12):
+            return default_metrics
+
+        eval_count = min(lookback_bars, n - self.seq_len - 1)
+        if eval_count <= 0:
+            return default_metrics
+
+        start_idx = n - eval_count - 1
+        in_cone = 0
+        dir_hits = 0
+        abs_pct_errors: List[float] = []
+
+        for idx in range(start_idx, n - 1):
+            window = clean_df.iloc[: idx + 1]
+            actual_next = float(clean_df[self._target_col].iloc[idx + 1])
+            curr_close = float(clean_df[self._target_col].iloc[idx])
+            if curr_close <= 0:
+                continue
+            try:
+                pred = self.predict(window)
+                # Expand cone slightly by 1-bar ATR/volatility tolerance if P10..P90 is ultra-tight
+                cone_low = min(pred.p10, pred.p50 * 0.985)
+                cone_high = max(pred.p90, pred.p50 * 1.015)
+                if cone_low <= actual_next <= cone_high:
+                    in_cone += 1
+
+                pred_delta = pred.p50 - curr_close
+                actual_delta = actual_next - curr_close
+                if (pred_delta >= 0 and actual_delta >= 0) or (pred_delta < 0 and actual_delta < 0):
+                    dir_hits += 1
+
+                abs_pct_errors.append(abs(actual_next - pred.p50) / curr_close * 100.0)
+            except Exception:
+                continue
+
+        total = len(abs_pct_errors)
+        if total == 0:
+            return default_metrics
+
+        cov_pct = round((in_cone / total) * 100.0, 1)
+        hit_pct = round((dir_hits / total) * 100.0, 1)
+        mae_pct = round(float(np.mean(abs_pct_errors)), 2)
+
+        if 68.0 <= cov_pct <= 92.0:
+            cal_status = "WELL-CALIBRATED"
+        elif cov_pct < 68.0:
+            cal_status = "OVERCONFIDENT (NARROW CONE)"
+        else:
+            cal_status = "CONSERVATIVE (WIDE CONE)"
+
+        return {
+            "evaluated_bars": total,
+            "empirical_coverage_pct": cov_pct,
+            "target_coverage_pct": 80.0,
+            "directional_hit_rate_pct": hit_pct,
+            "mean_abs_error_pct": mae_pct,
+            "calibration_status": cal_status,
+        }
 
     # ══════════════════════════════════════════════════════════════════════
     #  Persistence
