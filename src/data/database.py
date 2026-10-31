@@ -154,6 +154,106 @@ class DatabaseManager:
                     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
                 );
 
+                                -- TradeSense v5 Persistent Virtual Bot Tables
+                CREATE TABLE IF NOT EXISTS virtual_bot_accounts (
+                    user_id TEXT PRIMARY KEY,
+                    starting_virtual_cad REAL DEFAULT 10000.0,
+                    virtual_cash_cad REAL DEFAULT 10000.0,
+                    is_armed INTEGER DEFAULT 1,
+                    ws_tier TEXT DEFAULT 'Core',
+                    usd_account_active INTEGER DEFAULT 0,
+                    risk_per_trade REAL DEFAULT 0.02,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS virtual_bot_positions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    ticker TEXT NOT NULL,
+                    ws_symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    quantity REAL NOT NULL,
+                    entry_price REAL NOT NULL,
+                    current_price REAL NOT NULL,
+                    predicted_p50 REAL NOT NULL,
+                    target_p90 REAL NOT NULL,
+                    stop_p10 REAL NOT NULL,
+                    bars_held INTEGER DEFAULT 0,
+                    horizon_bars INTEGER DEFAULT 5,
+                    entry_fee_cad REAL DEFAULT 0.0,
+                    dna_profile TEXT,
+                    opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, ticker)
+                );
+
+                CREATE TABLE IF NOT EXISTS virtual_bot_trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    ticker TEXT NOT NULL,
+                    ws_symbol TEXT NOT NULL,
+                    mode TEXT DEFAULT 'LIVE_VIRTUAL',
+                    entry_price REAL NOT NULL,
+                    exit_price REAL NOT NULL,
+                    predicted_p50 REAL NOT NULL,
+                    quantity REAL NOT NULL,
+                    gross_pnl_cad REAL NOT NULL,
+                    ws_fees_cad REAL NOT NULL,
+                    net_pnl_cad REAL NOT NULL,
+                    net_pnl_pct REAL NOT NULL,
+                    prediction_hit INTEGER DEFAULT 0,
+                    exit_reason TEXT,
+                    opened_at TEXT,
+                    closed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_vbot_pos_user ON virtual_bot_positions(user_id);
+                CREATE INDEX IF NOT EXISTS idx_vbot_trades_user ON virtual_bot_trades(user_id, closed_at);
+
+                -- TradeSense v6 Passwordless Profiles & Real Wealthsimple Positions
+                CREATE TABLE IF NOT EXISTS user_profiles (
+                    profile_id TEXT PRIMARY KEY,
+                    display_name TEXT NOT NULL,
+                    avatar_initials TEXT NOT NULL,
+                    accent_color TEXT DEFAULT '#38bdf8',
+                    ws_tier TEXT DEFAULT 'Core',
+                    usd_account_active INTEGER DEFAULT 0,
+                    active_symbol TEXT DEFAULT 'BTC-CAD',
+                    active_timeframe TEXT DEFAULT '1h',
+                    horizon_bars INTEGER DEFAULT 5,
+                    model_preset TEXT DEFAULT 'AUTO_DNA',
+                    selected_models_json TEXT DEFAULT '[]',
+                    blending_mode TEXT DEFAULT 'WALK_FORWARD',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_active_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS real_ws_positions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tx_id TEXT UNIQUE NOT NULL,
+                    profile_id TEXT NOT NULL,
+                    ticker TEXT NOT NULL,
+                    ws_symbol TEXT NOT NULL,
+                    route_type TEXT DEFAULT 'DIRECT',
+                    status TEXT DEFAULT 'OPEN',
+                    entry_price REAL NOT NULL,
+                    current_price REAL NOT NULL,
+                    quantity REAL NOT NULL,
+                    capital_cad REAL NOT NULL,
+                    target_price REAL NOT NULL,
+                    stop_price REAL NOT NULL,
+                    trailing_stop_price REAL,
+                    est_fee_cad REAL DEFAULT 0.0,
+                    exit_price REAL,
+                    realized_pnl_cad REAL DEFAULT 0.0,
+                    realized_pnl_pct REAL DEFAULT 0.0,
+                    exit_reason TEXT,
+                    opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    closed_at TIMESTAMP
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_user_profiles_active ON user_profiles(last_active_at);
+                CREATE INDEX IF NOT EXISTS idx_real_ws_profile_status ON real_ws_positions(profile_id, status);
+
                 -- Indices
                 CREATE INDEX IF NOT EXISTS idx_sessions_token ON user_sessions(session_token);
                 CREATE INDEX IF NOT EXISTS idx_ws_trades_user_status ON wealthsimple_trades(user_id, status);
@@ -573,6 +673,359 @@ class DatabaseManager:
                 """,
                 (user_id, ticker, strat, tf, lb, sound),
             )
+
+
+
+    # ======================================================================
+    #  TradeSense v5 Virtual-Money Bot Engine Persistence
+    # ======================================================================
+
+    def get_or_create_virtual_account(
+        self,
+        user_id: str = "apex_quant",
+        starting_cash: float = 10000.0,
+        ws_tier: str = "Core",
+        usd_account_active: bool = False,
+    ) -> Dict[str, Any]:
+        """Fetch or initialize the user's persistent virtual trading account."""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM virtual_bot_accounts WHERE user_id = ?",
+                (str(user_id),),
+            ).fetchone()
+            if row:
+                return dict(row)
+
+            conn.execute(
+                """
+                INSERT INTO virtual_bot_accounts (user_id, starting_virtual_cad, virtual_cash_cad, is_armed, ws_tier, usd_account_active)
+                VALUES (?, ?, ?, 1, ?, ?)
+                """,
+                (str(user_id), starting_cash, starting_cash, ws_tier, 1 if usd_account_active else 0),
+            )
+            return {
+                "user_id": str(user_id),
+                "starting_virtual_cad": starting_cash,
+                "virtual_cash_cad": starting_cash,
+                "is_armed": 1,
+                "ws_tier": ws_tier,
+                "usd_account_active": 1 if usd_account_active else 0,
+                "risk_per_trade": 0.02,
+            }
+
+    def update_virtual_account(
+        self,
+        user_id: str,
+        virtual_cash_cad: Optional[float] = None,
+        is_armed: Optional[bool] = None,
+        ws_tier: Optional[str] = None,
+        usd_account_active: Optional[bool] = None,
+    ) -> None:
+        """Update virtual account balance, armed status, or fee tier."""
+        curr = self.get_or_create_virtual_account(user_id)
+        cash = virtual_cash_cad if virtual_cash_cad is not None else curr["virtual_cash_cad"]
+        armed = (1 if is_armed else 0) if is_armed is not None else curr["is_armed"]
+        tier = ws_tier if ws_tier is not None else curr["ws_tier"]
+        usd_acc = (1 if usd_account_active else 0) if usd_account_active is not None else curr["usd_account_active"]
+
+        with self.get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE virtual_bot_accounts
+                SET virtual_cash_cad = ?, is_armed = ?, ws_tier = ?, usd_account_active = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = ?
+                """,
+                (cash, armed, tier, usd_acc, str(user_id)),
+            )
+
+    def reset_virtual_wallet(self, user_id: str, starting_cash: float = 10000.0) -> None:
+        """Reset virtual wallet to starting cash and wipe open positions."""
+        with self.get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE virtual_bot_accounts
+                SET starting_virtual_cad = ?, virtual_cash_cad = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = ?
+                """,
+                (starting_cash, starting_cash, str(user_id)),
+            )
+            conn.execute("DELETE FROM virtual_bot_positions WHERE user_id = ?", (str(user_id),))
+
+    def get_virtual_positions(self, user_id: str) -> List[Dict[str, Any]]:
+        """Retrieve all active open virtual positions."""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM virtual_bot_positions WHERE user_id = ? ORDER BY opened_at DESC",
+                (str(user_id),),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def save_virtual_position(
+        self,
+        user_id: str,
+        ticker: str,
+        ws_symbol: str,
+        side: str,
+        quantity: float,
+        entry_price: float,
+        current_price: float,
+        predicted_p50: float,
+        target_p90: float,
+        stop_p10: float,
+        entry_fee_cad: float,
+        dna_profile: str,
+        horizon_bars: int = 5,
+    ) -> None:
+        """Insert or update an active virtual position."""
+        with self.get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO virtual_bot_positions (
+                    user_id, ticker, ws_symbol, side, quantity, entry_price, current_price,
+                    predicted_p50, target_p90, stop_p10, entry_fee_cad, dna_profile, horizon_bars
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, ticker) DO UPDATE SET
+                    current_price = excluded.current_price,
+                    predicted_p50 = excluded.predicted_p50,
+                    target_p90 = excluded.target_p90,
+                    stop_p10 = excluded.stop_p10,
+                    bars_held = bars_held + 1
+                """,
+                (
+                    str(user_id), ticker, ws_symbol, side, quantity, entry_price, current_price,
+                    predicted_p50, target_p90, stop_p10, entry_fee_cad, dna_profile, horizon_bars,
+                ),
+            )
+
+    def delete_virtual_position(self, user_id: str, ticker: str) -> None:
+        """Remove a closed position from active positions."""
+        with self.get_connection() as conn:
+            conn.execute(
+                "DELETE FROM virtual_bot_positions WHERE user_id = ? AND ticker = ?",
+                (str(user_id), ticker),
+            )
+
+    def record_virtual_trade(
+        self,
+        user_id: str,
+        ticker: str,
+        ws_symbol: str,
+        entry_price: float,
+        exit_price: float,
+        predicted_p50: float,
+        quantity: float,
+        gross_pnl_cad: float,
+        ws_fees_cad: float,
+        net_pnl_cad: float,
+        net_pnl_pct: float,
+        prediction_hit: bool,
+        exit_reason: str,
+        mode: str = "LIVE_VIRTUAL",
+        opened_at: Optional[str] = None,
+    ) -> None:
+        """Record a completed virtual trade into the proof-of-edge ledger."""
+        with self.get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO virtual_bot_trades (
+                    user_id, ticker, ws_symbol, mode, entry_price, exit_price,
+                    predicted_p50, quantity, gross_pnl_cad, ws_fees_cad,
+                    net_pnl_cad, net_pnl_pct, prediction_hit, exit_reason, opened_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(user_id), ticker, ws_symbol, mode, entry_price, exit_price,
+                    predicted_p50, quantity, gross_pnl_cad, ws_fees_cad,
+                    net_pnl_cad, net_pnl_pct, 1 if prediction_hit else 0, exit_reason,
+                    opened_at,
+                ),
+            )
+
+    def get_virtual_trades(self, user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """Retrieve historical virtual trades."""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM virtual_bot_trades
+                WHERE user_id = ?
+                ORDER BY closed_at DESC
+                LIMIT ?
+                """,
+                (str(user_id), limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+
+
+    # ======================================================================
+    #  TradeSense v6 Multi-Profile & Real Wealthsimple Trade Engine
+    # ======================================================================
+
+    def get_user_profile(self, profile_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve profile attributes by slug (e.g. 'uzair', 'waleed')."""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM user_profiles WHERE profile_id = ?",
+                (str(profile_id).lower(),),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_user_profiles(self) -> List[Dict[str, Any]]:
+        """List all registered user profiles ordered by creation time."""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM user_profiles ORDER BY created_at ASC"
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def save_user_profile(self, data: Dict[str, Any]) -> None:
+        """Create or update a user profile."""
+        pid = str(data["profile_id"]).lower()
+        with self.get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO user_profiles (
+                    profile_id, display_name, avatar_initials, accent_color,
+                    ws_tier, usd_account_active, active_symbol, active_timeframe,
+                    horizon_bars, model_preset, selected_models_json, blending_mode,
+                    last_active_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(profile_id) DO UPDATE SET
+                    display_name = excluded.display_name,
+                    avatar_initials = excluded.avatar_initials,
+                    accent_color = excluded.accent_color,
+                    ws_tier = excluded.ws_tier,
+                    usd_account_active = excluded.usd_account_active,
+                    active_symbol = excluded.active_symbol,
+                    active_timeframe = excluded.active_timeframe,
+                    horizon_bars = excluded.horizon_bars,
+                    model_preset = excluded.model_preset,
+                    selected_models_json = excluded.selected_models_json,
+                    blending_mode = excluded.blending_mode,
+                    last_active_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    pid,
+                    data.get("display_name", pid.capitalize()),
+                    data.get("avatar_initials", pid[:2].upper()),
+                    data.get("accent_color", "#38bdf8"),
+                    data.get("ws_tier", "Core"),
+                    1 if data.get("usd_account_active") else 0,
+                    data.get("active_symbol", "BTC-CAD"),
+                    data.get("active_timeframe", "1h"),
+                    int(data.get("horizon_bars", 5)),
+                    data.get("model_preset", "AUTO_DNA"),
+                    data.get("selected_models_json", "[]"),
+                    data.get("blending_mode", "WALK_FORWARD"),
+                ),
+            )
+
+    def delete_user_profile(self, profile_id: str) -> None:
+        """Delete a profile and associated accounts."""
+        pid = str(profile_id).lower()
+        with self.get_connection() as conn:
+            conn.execute("DELETE FROM user_profiles WHERE profile_id = ?", (pid,))
+            conn.execute("DELETE FROM virtual_bot_accounts WHERE user_id = ?", (pid,))
+            conn.execute("DELETE FROM virtual_bot_positions WHERE user_id = ?", (pid,))
+            conn.execute("DELETE FROM virtual_bot_trades WHERE user_id = ?", (pid,))
+            conn.execute("DELETE FROM real_ws_positions WHERE profile_id = ?", (pid,))
+
+    def get_real_ws_positions(self, profile_id: Optional[str] = None, status: str = "OPEN") -> List[Dict[str, Any]]:
+        """Retrieve real logged Wealthsimple positions (OPEN or CLOSED)."""
+        with self.get_connection() as conn:
+            if profile_id:
+                rows = conn.execute(
+                    "SELECT * FROM real_ws_positions WHERE profile_id = ? AND status = ? ORDER BY opened_at DESC",
+                    (str(profile_id).lower(), status),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM real_ws_positions WHERE status = ? ORDER BY opened_at DESC",
+                    (status,),
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    def save_real_ws_position(self, data: Dict[str, Any]) -> None:
+        """Log a real Wealthsimple execution fill."""
+        with self.get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO real_ws_positions (
+                    tx_id, profile_id, ticker, ws_symbol, route_type, status,
+                    entry_price, current_price, quantity, capital_cad,
+                    target_price, stop_price, trailing_stop_price, est_fee_cad
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(tx_id) DO UPDATE SET
+                    current_price = excluded.current_price,
+                    trailing_stop_price = excluded.trailing_stop_price
+                """,
+                (
+                    data["tx_id"],
+                    str(data["profile_id"]).lower(),
+                    data["ticker"],
+                    data["ws_symbol"],
+                    data.get("route_type", "DIRECT"),
+                    data.get("status", "OPEN"),
+                    float(data["entry_price"]),
+                    float(data.get("current_price", data["entry_price"])),
+                    float(data["quantity"]),
+                    float(data["capital_cad"]),
+                    float(data["target_price"]),
+                    float(data["stop_price"]),
+                    float(data.get("trailing_stop_price", data["stop_price"])),
+                    float(data.get("est_fee_cad", 0.0)),
+                ),
+            )
+
+    def close_real_ws_position(
+        self,
+        tx_id: str,
+        exit_price: float,
+        exit_reason: str = "MANUAL_CLOSE",
+        realized_pnl_cad: Optional[float] = None,
+        realized_pnl_pct: Optional[float] = None,
+    ) -> None:
+        """Close a real Wealthsimple position and record realized CAD outcome."""
+        with self.get_connection() as conn:
+            if realized_pnl_cad is None or realized_pnl_pct is None:
+                row = conn.execute("SELECT entry_price, quantity FROM real_ws_positions WHERE tx_id = ?", (tx_id,)).fetchone()
+                if row:
+                    entry = float(row["entry_price"])
+                    qty = float(row["quantity"])
+                    realized_pnl_cad = round((exit_price - entry) * qty, 2)
+                    realized_pnl_pct = round(((exit_price - entry) / max(entry, 1e-4)) * 100.0, 2)
+                else:
+                    realized_pnl_cad = 0.0
+                    realized_pnl_pct = 0.0
+
+            conn.execute(
+                """
+                UPDATE real_ws_positions
+                SET status = 'CLOSED',
+                    exit_price = ?,
+                    exit_reason = ?,
+                    realized_pnl_cad = ?,
+                    realized_pnl_pct = ?,
+                    closed_at = CURRENT_TIMESTAMP
+                WHERE tx_id = ?
+                """,
+                (exit_price, exit_reason, realized_pnl_cad, realized_pnl_pct, tx_id),
+            )
+
+    def get_real_ws_history(self, profile_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """Retrieve complete real trade history for audit/leaderboard."""
+        with self.get_connection() as conn:
+            if profile_id:
+                rows = conn.execute(
+                    "SELECT * FROM real_ws_positions WHERE profile_id = ? ORDER BY opened_at DESC LIMIT ?",
+                    (str(profile_id).lower(), limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM real_ws_positions ORDER BY opened_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            return [dict(r) for r in rows]
 
 
 # Global singleton instance
