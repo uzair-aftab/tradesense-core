@@ -88,7 +88,7 @@ class LiveMarketFeed:
     def __init__(
         self,
         ticker: str = "BTC-CAD",
-        mode: StreamMode = StreamMode.SYNTHETIC_MICROSTRUCTURE,
+        mode: StreamMode = StreamMode.LIVE_STREAM,
         base_df: Optional[pd.DataFrame] = None,
         tick_interval_sec: float = 1.0,
         ticks_per_bar: int = 5,
@@ -114,16 +114,80 @@ class LiveMarketFeed:
         self._volatility = 0.0004  # 4 bps per tick for realistic volatility
         self._tick_history: deque[MarketTick] = deque(maxlen=500)
         self._ticks_in_current_bar = 0
+        self._last_live_poll_ts: float = 0.0
+        self.data_source_label: str = "LIVE MARKET FEED • Yahoo Finance"
+        self.last_live_sync_str: str = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
 
         # Build initial streaming dataframe
         self._init_streaming_data()
+
+    def _poll_live_spot_price(self) -> Optional[float]:
+        """
+        Poll real-time live spot price from public exchanges (Coinbase CAD/USD for crypto)
+        or Yahoo Finance fast_info for equities/ETFs.
+        """
+        import json
+        import urllib.request
+        import yfinance as yf
+
+        sym = self.ticker.upper().strip()
+
+        # 1. Fast sub-second public spot endpoint for Crypto pairs (e.g. BTC-CAD, ETH-CAD, SOL-CAD)
+        if "-" in sym and any(c in sym for c in ["BTC", "ETH", "SOL", "ADA", "AVAX", "DOGE"]):
+            try:
+                url = f"https://api.coinbase.com/v2/prices/{sym}/spot"
+                req = urllib.request.Request(url, headers={"User-Agent": "TradeSense/3.0"})
+                with urllib.request.urlopen(req, timeout=2.0) as resp:
+                    payload = json.loads(resp.read().decode("utf-8"))
+                    amt = float(payload.get("data", {}).get("amount", 0.0))
+                    if amt > 0:
+                        self.data_source_label = f"🟢 LIVE SPOT • Coinbase ({sym})"
+                        self.last_live_sync_str = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+                        return amt
+            except Exception:
+                pass
+
+        # 2. Yahoo Finance fast_info / 1m quote
+        try:
+            tkr = yf.Ticker(sym)
+            fi = getattr(tkr, "fast_info", None)
+            if fi is not None:
+                last_p = getattr(fi, "last_price", None)
+                if last_p is None and isinstance(fi, dict):
+                    last_p = fi.get("lastPrice") or fi.get("last_price")
+                if last_p and float(last_p) > 0:
+                    self.data_source_label = f"🟢 LIVE QUOTE • Yahoo Finance ({sym})"
+                    self.last_live_sync_str = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+                    return float(last_p)
+        except Exception:
+            pass
+
+        return None
 
     def _init_streaming_data(self) -> None:
         """Initialize or reset streaming data according to stream mode."""
         if self._mode == StreamMode.HISTORICAL_REPLAY and self.base_df is not None and not self.base_df.empty:
             self._streaming_df = self.base_df.iloc[: self._replay_idx + 1].copy()
+            self.data_source_label = f"🟡 HISTORICAL REPLAY ({self.ticker})"
+        elif self._mode == StreamMode.LIVE_STREAM and self.base_df is not None and not self.base_df.empty:
+            # Seed with actual market OHLCV bars from base_df (never fake random bars!)
+            self._streaming_df = self.base_df.tail(80).copy()
+            if "Whale_Z" not in self._streaming_df.columns or "Whale_Flag" not in self._streaming_df.columns:
+                vols = self._streaming_df["Volume"].astype(float)
+                rm = vols.rolling(20, min_periods=1).mean()
+                rs = vols.rolling(20, min_periods=1).std().fillna(1.0).replace(0, 1.0)
+                wz = (vols - rm) / rs
+                self._streaming_df["Whale_Z"] = wz
+                self._streaming_df["Whale_Flag"] = (wz > 2.0).astype(int)
+            # Poll initial live spot price immediately
+            live_p = self._poll_live_spot_price()
+            if live_p and live_p > 0:
+                self._current_price = live_p
+                self._anchor_price = live_p
+                self._last_live_poll_ts = time.time()
         else:
             self._streaming_df = self._generate_initial_baseline()
+            self.data_source_label = f"🟣 SYNTHETIC MICROSTRUCTURE ({self.ticker})"
 
         if "Volume" in self._streaming_df.columns:
             self._streaming_df["Volume"] = self._streaming_df["Volume"].astype(float)
@@ -183,6 +247,10 @@ class LiveMarketFeed:
     def streaming_df(self) -> pd.DataFrame:
         return self._streaming_df
 
+    def get_next_tick(self) -> MarketTick:
+        """Alias for next_tick()."""
+        return self.next_tick()
+
     def next_tick(self) -> MarketTick:
         """
         Produce the next live or simulated tick.
@@ -221,31 +289,46 @@ class LiveMarketFeed:
             self._tick_history.append(tick)
             return tick
 
-        # SYNTHETIC MICROSTRUCTURE MODE
-        # Calibrated Merton Jump-Diffusion SDE with mean-reverting anchor
-        shock = np.random.normal(0, 1)
+        is_crypto = any(c in self.ticker.upper() for c in ["BTC", "ETH", "SOL", "DOGE", "ADA", "AVAX"])
 
-        # Mean reversion drift towards anchor price
-        reversion_strength = 0.002
-        drift = reversion_strength * (self._anchor_price - self._current_price) / self._anchor_price
+        # LIVE_STREAM MODE: Poll real spot price every 8 seconds and anchor micro-ticks to live exchange quote
+        if self.mode == StreamMode.LIVE_STREAM:
+            now_epoch = time.time()
+            if (now_epoch - self._last_live_poll_ts) >= 8.0:
+                self._last_live_poll_ts = now_epoch
+                live_spot = self._poll_live_spot_price()
+                if live_spot and live_spot > 0:
+                    self._anchor_price = live_spot
+                    self._current_price = live_spot
 
-        # Poisson Whale block trades (3% probability per tick)
-        is_whale = random.random() < 0.04
-        whale_z = 0.0
-        jump = 0.0
+            # Micro order-book jitter around the live exchange anchor (±1.2 bps)
+            micro_jitter = np.random.normal(0, 0.00012)
+            reversion = 0.35 * (self._anchor_price - self._current_price) / max(1.0, self._anchor_price)
+            self._current_price = max(0.01, self._current_price * (1.0 + reversion + micro_jitter))
 
-        is_crypto = any(c in self.ticker.upper() for c in ["BTC", "ETH", "SOL", "DOGE"])
-        if is_whale:
-            jump_dir = 1 if random.random() < 0.55 else -1
-            # Realistic institutional jump: 15 to 35 basis points
-            jump = jump_dir * np.random.uniform(0.0015, 0.0035)
-            whale_z = float(np.random.uniform(2.5, 4.8))
-            volume = float(np.random.uniform(5.0, 35.0)) if is_crypto else float(np.random.uniform(5_000, 25_000))
+            # Use real volume stats from the latest bar
+            last_wz = float(self._streaming_df["Whale_Z"].iloc[-1]) if ("Whale_Z" in self._streaming_df.columns and not self._streaming_df.empty) else 0.4
+            is_whale = bool(last_wz >= 2.0)
+            whale_z = last_wz
+            volume = float(np.random.uniform(0.1, 1.2)) if is_crypto else float(np.random.uniform(50, 400))
         else:
-            volume = float(np.random.uniform(0.05, 1.8)) if is_crypto else float(np.random.uniform(100, 1_500))
+            # SYNTHETIC MICROSTRUCTURE MODE
+            shock = np.random.normal(0, 1)
+            reversion_strength = 0.002
+            drift = reversion_strength * (self._anchor_price - self._current_price) / self._anchor_price
+            is_whale = random.random() < 0.04
+            whale_z = 0.0
+            jump = 0.0
+            if is_whale:
+                jump_dir = 1 if random.random() < 0.55 else -1
+                jump = jump_dir * np.random.uniform(0.0015, 0.0035)
+                whale_z = float(np.random.uniform(2.5, 4.8))
+                volume = float(np.random.uniform(5.0, 35.0)) if is_crypto else float(np.random.uniform(5_000, 25_000))
+            else:
+                volume = float(np.random.uniform(0.05, 1.8)) if is_crypto else float(np.random.uniform(100, 1_500))
 
-        ret = drift + self._volatility * shock + jump
-        self._current_price = max(1.0, self._current_price * (1.0 + ret))
+            ret = drift + self._volatility * shock + jump
+            self._current_price = max(1.0, self._current_price * (1.0 + ret))
 
         spread = max(0.01, self._current_price * 0.00025)
         bid = self._current_price - spread / 2

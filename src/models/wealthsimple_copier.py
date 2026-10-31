@@ -75,6 +75,27 @@ CANADIAN_PROXIES: Dict[str, Dict[str, Any]] = {
         "type": "Crypto",
         "description": "Direct Solana Crypto trading on Wealthsimple",
     },
+    "SOL-USD": {
+        "ws_symbol": "SOL",
+        "name": "Solana (Wealthsimple Crypto)",
+        "commission": "1.5% Spread Fee",
+        "type": "Crypto",
+        "description": "Direct Solana Crypto trading on Wealthsimple",
+    },
+    "ADA-CAD": {
+        "ws_symbol": "ADA",
+        "name": "Cardano (Wealthsimple Crypto)",
+        "commission": "1.5% Spread Fee",
+        "type": "Crypto",
+        "description": "Direct Cardano Crypto trading on Wealthsimple",
+    },
+    "AVAX-CAD": {
+        "ws_symbol": "AVAX",
+        "name": "Avalanche (Wealthsimple Crypto)",
+        "commission": "1.5% Spread Fee",
+        "type": "Crypto",
+        "description": "Direct Avalanche Crypto trading on Wealthsimple",
+    },
     "AAPL": {
         "ws_symbol": "AAPL.NE",
         "name": "Apple CDR (CAD Hedged)",
@@ -96,6 +117,34 @@ CANADIAN_PROXIES: Dict[str, Dict[str, Any]] = {
         "type": "CDR",
         "description": "Canadian Depositary Receipt for Microsoft (no US FX fee)",
     },
+    "GOOGL": {
+        "ws_symbol": "GOOG.NE",
+        "name": "Alphabet CDR (CAD Hedged)",
+        "commission": "$0 CAD (NEO)",
+        "type": "CDR",
+        "description": "Canadian Depositary Receipt for Alphabet (no US FX fee)",
+    },
+    "AMZN": {
+        "ws_symbol": "AMZN.NE",
+        "name": "Amazon CDR (CAD Hedged)",
+        "commission": "$0 CAD (NEO)",
+        "type": "CDR",
+        "description": "Canadian Depositary Receipt for Amazon (no US FX fee)",
+    },
+    "SPY": {
+        "ws_symbol": "VFV.TO",
+        "name": "Vanguard S&P 500 Index ETF (CAD)",
+        "commission": "$0 CAD (TSX)",
+        "type": "ETF",
+        "description": "Canadian S&P 500 ETF ($0 comm, zero US FX fee on Wealthsimple)",
+    },
+    "QQQ": {
+        "ws_symbol": "XQQ.TO",
+        "name": "iShares NASDAQ 100 Index ETF (CAD-Hedged)",
+        "commission": "$0 CAD (TSX)",
+        "type": "ETF",
+        "description": "Canadian Nasdaq-100 ETF ($0 comm, zero US FX fee on Wealthsimple)",
+    },
     "SHOP.TO": {
         "ws_symbol": "SHOP.TO",
         "name": "Shopify Inc (TSX)",
@@ -103,31 +152,303 @@ CANADIAN_PROXIES: Dict[str, Dict[str, Any]] = {
         "type": "Equity",
         "description": "Canadian Mega-Cap Tech Leader ($0 comm on Wealthsimple)",
     },
+    "RY.TO": {
+        "ws_symbol": "RY.TO",
+        "name": "Royal Bank of Canada (TSX)",
+        "commission": "$0 CAD (TSX)",
+        "type": "Equity",
+        "description": "Canada's largest bank ($0 comm on Wealthsimple)",
+    },
+    "TD.TO": {
+        "ws_symbol": "TD.TO",
+        "name": "TD Bank Group (TSX)",
+        "commission": "$0 CAD (TSX)",
+        "type": "Equity",
+        "description": "Top-tier Canadian Bank ($0 comm on Wealthsimple)",
+    },
+    "ENB.TO": {
+        "ws_symbol": "ENB.TO",
+        "name": "Enbridge Inc (TSX)",
+        "commission": "$0 CAD (TSX)",
+        "type": "Equity",
+        "description": "Canadian Energy Infrastructure Leader ($0 comm on Wealthsimple)",
+    },
+    "CNR.TO": {
+        "ws_symbol": "CNR.TO",
+        "name": "Canadian National Railway (TSX)",
+        "commission": "$0 CAD (TSX)",
+        "type": "Equity",
+        "description": "Canadian Rail & Logistics Leader ($0 comm on Wealthsimple)",
+    },
+    "VFV.TO": {
+        "ws_symbol": "VFV.TO",
+        "name": "Vanguard S&P 500 Index ETF (TSX)",
+        "commission": "$0 CAD (TSX)",
+        "type": "ETF",
+        "description": "Canadian S&P 500 ETF ($0 comm on Wealthsimple)",
+    },
+    "XIU.TO": {
+        "ws_symbol": "XIU.TO",
+        "name": "iShares S&P/TSX 60 Index ETF (TSX)",
+        "commission": "$0 CAD (TSX)",
+        "type": "ETF",
+        "description": "Top 60 Canadian TSX Companies ($0 comm on Wealthsimple)",
+    },
 }
 
 
+# Default fallback CAD prices for TSX/NEO proxies when offline
+DEFAULT_PROXY_PRICES_CAD: Dict[str, float] = {
+    "BTCC.TO": 21.45,
+    "ETHX.TO": 19.85,
+    "NVDA.NE": 29.60,
+    "AAPL.NE": 32.40,
+    "MSFT.NE": 28.90,
+    "GOOG.NE": 27.50,
+    "AMZN.NE": 26.80,
+    "VFV.TO": 146.50,
+    "XQQ.TO": 152.20,
+    "XIU.TO": 37.80,
+    "SHOP.TO": 154.00,
+    "RY.TO": 172.50,
+    "TD.TO": 79.40,
+    "ENB.TO": 59.80,
+    "CNR.TO": 156.00,
+}
+
+_PROXY_PRICE_CACHE: Dict[str, tuple[float, float]] = {}
+
+
 class CanadianAssetProxy:
-    """Helper for Canadian Wealthsimple asset proxies."""
+    """Helper for Canadian Wealthsimple asset proxies and live CAD share price translation."""
 
     @staticmethod
     def get_proxy(ticker: str) -> Dict[str, Any]:
-        base = ticker.upper()
+        base = ticker.upper().strip()
         if base in CANADIAN_PROXIES:
-            return CANADIAN_PROXIES[base]
-        if base.endswith(".TO") or base.endswith(".V") or base.endswith(".NE"):
-            return {
+            info = dict(CANADIAN_PROXIES[base])
+        elif base.endswith(".TO") or base.endswith(".V") or base.endswith(".NE"):
+            info = {
                 "ws_symbol": base,
                 "name": base,
                 "commission": "$0 CAD (Canadian)",
                 "type": "Equity",
                 "description": f"Direct Canadian equity ({base}) on Wealthsimple",
             }
+        else:
+            info = {
+                "ws_symbol": base,
+                "name": base,
+                "commission": "Standard fee",
+                "type": "Direct Asset",
+                "description": f"Direct asset ({base}) on Wealthsimple",
+            }
+        info["ws_ticker"] = info["ws_symbol"]
+        info["badge"] = f"{info['ws_symbol']} ({info['commission']})"
+        return info
+
+    @classmethod
+    def resolve(cls, ticker: str) -> Dict[str, Any]:
+        """Alias for get_proxy returning ws_symbol, ws_ticker, badge, commission, type."""
+        return cls.get_proxy(ticker)
+
+    @classmethod
+    def _fetch_proxy_price_cad(cls, ws_symbol: str, underlying_ticker: str = "", underlying_price: float = 0.0) -> float:
+        """
+        Fetch the actual live CAD share price float for a Wealthsimple proxy (e.g. BTCC.TO, NVDA.NE, VFV.TO).
+        Uses a 60-second TTL cache and falls back to calibrated proxy prices if offline.
+        """
+        import time
+        import yfinance as yf
+
+        sym = ws_symbol.upper().strip()
+        u_sym = underlying_ticker.upper().strip()
+
+        if sym == u_sym or (u_sym.startswith(sym + "-") and underlying_price > 0):
+            return float(underlying_price) if underlying_price > 0 else DEFAULT_PROXY_PRICES_CAD.get(sym, 100.0)
+
+        now = time.time()
+        if sym in _PROXY_PRICE_CACHE:
+            cached_ts, cached_p = _PROXY_PRICE_CACHE[sym]
+            if (now - cached_ts) < 60.0 and cached_p > 0:
+                return cached_p
+
+        yf_lookup = sym
+        try:
+            tkr = yf.Ticker(yf_lookup)
+            fi = getattr(tkr, "fast_info", None)
+            if fi is not None:
+                last_p = getattr(fi, "last_price", None)
+                if last_p is None and isinstance(fi, dict):
+                    last_p = fi.get("lastPrice") or fi.get("last_price")
+                if last_p and float(last_p) > 0:
+                    val = round(float(last_p), 2)
+                    _PROXY_PRICE_CACHE[sym] = (now, val)
+                    return val
+
+            hist = tkr.history(period="5d", interval="1d")
+            if hist is not None and not hist.empty:
+                val = round(float(hist["Close"].iloc[-1]), 2)
+                if val > 0:
+                    _PROXY_PRICE_CACHE[sym] = (now, val)
+                    return val
+        except Exception:
+            pass
+
+        fallback = DEFAULT_PROXY_PRICES_CAD.get(sym, float(underlying_price) if underlying_price > 0 else 50.0)
+        _PROXY_PRICE_CACHE[sym] = (now, fallback)
+        return fallback
+
+    @classmethod
+    def get_live_proxy_price(
+        cls,
+        ticker: str,
+        current_underlying_price: float = 0.0,
+        underlying_ticker: str = "",
+        underlying_price: float = 0.0,
+    ) -> Dict[str, Any]:
+        """
+        Return a complete dictionary of the Wealthsimple proxy symbol, live CAD share price,
+        commission badge, and unit-scaling status for a given ticker.
+        """
+        u_ticker = underlying_ticker or ticker
+        u_price = current_underlying_price if current_underlying_price > 0 else underlying_price
+        proxy_info = cls.get_proxy(u_ticker)
+        ws_sym = proxy_info["ws_symbol"]
+        live_cad = cls._fetch_proxy_price_cad(ws_sym, underlying_ticker=u_ticker, underlying_price=u_price)
+        is_unit_scaled = (ws_sym.upper() != u_ticker.upper()) and not u_ticker.upper().startswith(ws_sym.upper() + "-")
+        out = dict(proxy_info)
+        out["proxy_price_cad"] = live_cad
+        out["is_unit_scaled"] = is_unit_scaled
+        return out
+
+    @classmethod
+    def translate_order_to_proxy(
+        cls,
+        ticker: str,
+        underlying_price: Optional[float] = None,
+        entry_price: Optional[float] = None,
+        target_price: Optional[float] = None,
+        stop_price: Optional[float] = None,
+        capital_cad: float = 500.0,
+        ws_tier: str = "Core",
+        use_spot_crypto_after_hours: bool = False,
+        underlying_entry: Optional[float] = None,
+        underlying_target: Optional[float] = None,
+        underlying_stop: Optional[float] = None,
+        tier: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Translate an underlying asset trade setup (e.g., BTC-CAD @ $115,860 or NVDA @ $138 USD)
+        into exact, ready-to-paste Wealthsimple proxy share prices (e.g., BTCC.TO @ $21.45 CAD
+        or NVDA.NE @ $29.60 CAD), including exact share quantity, Wealthsimple tier fees,
+        and TSX/NEO market-hours guidance.
+        """
+        eff_entry = float(underlying_entry if underlying_entry is not None else (entry_price or 100.0))
+        eff_target = float(underlying_target if underlying_target is not None else (target_price or eff_entry * 1.03))
+        eff_stop = float(underlying_stop if underlying_stop is not None else (stop_price or eff_entry * 0.985))
+        eff_u_price = float(underlying_price if underlying_price is not None else eff_entry)
+        eff_tier = str(tier if tier is not None else ws_tier)
+
+        proxy_info = cls.get_proxy(ticker)
+        ws_sym = proxy_info["ws_symbol"]
+        inst_type = proxy_info.get("type", "ETF")
+
+        try:
+            from src.data.market_intel import MarketIntelligenceEngine
+            tsx_open, tsx_label, _ = MarketIntelligenceEngine.is_tsx_market_open()
+        except Exception:
+            tsx_open, tsx_label = True, "🟢 TSX/NEO MARKET HOURS"
+
+        u_price = max(0.0001, eff_u_price)
+        entry_ratio = eff_entry / u_price if eff_entry > 0 else 1.0
+        target_ratio = eff_target / u_price if eff_target > 0 else 1.028
+        stop_ratio = eff_stop / u_price if eff_stop > 0 else 0.985
+
+        is_crypto_underlying = any(c in ticker.upper() for c in ["BTC", "ETH", "SOL", "ADA", "AVAX"])
+        if use_spot_crypto_after_hours and is_crypto_underlying:
+            exec_symbol = ticker.upper().split("-")[0]
+            proxy_live = u_price
+            is_distinct_proxy = False
+            inst_type = "Crypto"
+        else:
+            exec_symbol = ws_sym
+            proxy_live = cls._fetch_proxy_price_cad(ws_sym, underlying_ticker=ticker, underlying_price=u_price)
+            is_distinct_proxy = (exec_symbol.upper() != ticker.upper()) and not ticker.upper().startswith(exec_symbol.upper() + "-")
+
+        p_entry = round(proxy_live * entry_ratio, 2 if proxy_live >= 1.0 else 4)
+        p_target = round(proxy_live * target_ratio, 2 if proxy_live >= 1.0 else 4)
+        p_stop = round(proxy_live * stop_ratio, 2 if proxy_live >= 1.0 else 4)
+
+        tier_norm = (eff_tier or "Core").strip().title()
+        if inst_type in ("ETF", "Equity"):
+            round_trip_fee_pct = 0.0
+            fee_desc = "$0 Commission (TSX CAD ETF/Equity)"
+        elif inst_type == "CDR":
+            round_trip_fee_pct = 0.0
+            fee_desc = "$0 Commission + $0 US FX (NEO CAD-Hedged CDR)"
+        elif inst_type == "Crypto":
+            one_way = 0.50 if "Gen" in tier_norm else (0.75 if "Prem" in tier_norm else 1.50)
+            round_trip_fee_pct = one_way * 2.0
+            fee_desc = f"Wealthsimple {tier_norm} Crypto ({one_way:.2f}% per side)"
+        else:
+            round_trip_fee_pct = 0.0
+            fee_desc = f"Wealthsimple {tier_norm} ($0 Commission)"
+
+        cap = max(10.0, float(capital_cad))
+        shares = round(cap / max(0.0001, p_entry), 4 if p_entry > 200 else 2)
+        gross_profit_cad = abs(p_target - p_entry) * shares
+        est_fee_cad = cap * (round_trip_fee_pct / 100.0)
+        net_profit_cad = gross_profit_cad - est_fee_cad
+        max_loss_cad = abs(p_entry - p_stop) * shares + est_fee_cad
+
+        if is_distinct_proxy and not tsx_open and is_crypto_underlying:
+            venue_guidance = (
+                f"{tsx_label}: Queue a $0-fee Limit Order on {exec_symbol} for 9:30 AM ET open, "
+                f"or trade 24/7 Spot Crypto for immediate overnight execution."
+            )
+        elif is_distinct_proxy:
+            venue_guidance = (
+                f"Mapped {ticker} (${u_price:,.2f}) → {exec_symbol} (${proxy_live:,.2f} CAD/sh) "
+                f"for $0 commission on Wealthsimple."
+            )
+        else:
+            venue_guidance = f"Direct execution on {exec_symbol} (${proxy_live:,.2f} CAD) • {fee_desc}."
+
         return {
-            "ws_symbol": base,
-            "name": base,
-            "commission": "Standard fee",
-            "type": "Direct Asset",
-            "description": f"Direct asset ({base}) on Wealthsimple",
+            "ticker": ticker,
+            "ws_symbol": exec_symbol,
+            "exec_symbol": exec_symbol,
+            "underlying_price": round(u_price, 2),
+            "proxy_live_price": proxy_live,
+            "proxy_price_cad": proxy_live,
+            "is_distinct_proxy": is_distinct_proxy,
+            "is_unit_scaled": is_distinct_proxy,
+            "proxy_entry": p_entry,
+            "proxy_entry_cad": p_entry,
+            "proxy_target": p_target,
+            "proxy_target_cad": p_target,
+            "proxy_stop": p_stop,
+            "proxy_stop_cad": p_stop,
+            "underlying_entry": round(eff_entry, 2),
+            "underlying_target": round(eff_target, 2),
+            "underlying_stop": round(eff_stop, 2),
+            "shares": shares,
+            "share_qty": shares,
+            "capital_cad": round(cap, 2),
+            "gross_profit_cad": round(gross_profit_cad, 2),
+            "estimated_fee_cad": round(est_fee_cad, 2),
+            "est_roundtrip_fee_cad": round(est_fee_cad, 2),
+            "net_profit_cad": round(net_profit_cad, 2),
+            "net_expected_profit_cad": round(net_profit_cad, 2),
+            "max_loss_cad": round(max_loss_cad, 2),
+            "round_trip_fee_pct": round(round_trip_fee_pct, 2),
+            "fee_description": fee_desc,
+            "fee_badge": fee_desc,
+            "tsx_open": tsx_open,
+            "tsx_status_label": tsx_label,
+            "venue_guidance": venue_guidance,
+            "execution_guidance": venue_guidance,
         }
 
 

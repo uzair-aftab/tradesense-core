@@ -430,8 +430,17 @@ class DataLake:
                 else:
                     regime = "Neutral"
 
-                # Sentiment score
+                # Sentiment score & dominant news catalyst
                 sentiment_score = self._get_sentiment_score(ticker)
+                catalyst_label = "MARKET PULSE"
+                try:
+                    from src.data.market_intel import market_intel
+                    intel_rep = market_intel.get_asset_intelligence(ticker)
+                    catalyst_label = intel_rep.dominant_catalyst
+                    if sentiment_score == 0.0 and intel_rep.sentiment_score != 0.0:
+                        sentiment_score = intel_rep.sentiment_score
+                except Exception:
+                    pass
 
                 results.append({
                     "Ticker": ticker,
@@ -442,6 +451,7 @@ class DataLake:
                     "Whale Alert": "🚨 WHALE" if whale_alert else "Normal",
                     "Regime": regime,
                     "Sentiment": round(sentiment_score, 2),
+                    "Catalyst": catalyst_label,
                 })
             except Exception as exc:
                 logger.warning("Error scanning ticker %s: %s", ticker, exc)
@@ -581,7 +591,7 @@ class DataLake:
 
         Backend precedence:
             1. FinBERT (GPU-accelerated) via ``transformers``
-            2. VADER (rule-based fallback)
+            2. VADER + Financial Lexicon via MarketIntelligenceEngine
         """
         try:
             score = self._get_sentiment_score(ticker)
@@ -596,8 +606,17 @@ class DataLake:
         """
         Return a single aggregated sentiment score for *ticker*.
 
-        Tries FinBERT first; falls back to VADER.
+        Tries FinBERT first if configured; otherwise uses MarketIntelligenceEngine / VADER.
         """
+        if self.sentiment_backend != "finbert":
+            try:
+                from src.data.market_intel import market_intel
+                rep = market_intel.get_asset_intelligence(ticker)
+                if rep.articles:
+                    return float(rep.sentiment_score)
+            except Exception:
+                pass
+
         headlines = self._scrape_headlines(ticker)
         if not headlines:
             logger.debug("No headlines found for %s", ticker)
@@ -610,8 +629,8 @@ class DataLake:
     @staticmethod
     def _scrape_headlines(ticker: str, max_items: int = 20) -> List[str]:
         """
-        Pull recent news headlines for *ticker* via Finnhub (if key present)
-        or yfinance fallback.
+        Pull recent news headlines for *ticker* via Finnhub (if key present),
+        yfinance, or MarketIntelligenceEngine Google News Financial RSS fallback.
 
         Returns up to *max_items* headline strings.
         """
@@ -638,14 +657,22 @@ class DataLake:
         except Exception as exc:
             logger.debug("Finnhub headline fetch error for %s: %s", ticker, exc)
 
-        # 2. Fallback to yfinance
+        # 2. Fallback to MarketIntelligenceEngine (yfinance smart mapping + Google News RSS)
+        try:
+            from src.data.market_intel import market_intel
+            rep = market_intel.get_asset_intelligence(ticker)
+            if rep.articles:
+                return [a.title for a in rep.articles[:max_items]]
+        except Exception:
+            pass
+
+        # 3. Direct yfinance fallback
         try:
             tkr = yf.Ticker(ticker)
             news = tkr.news
             if not news:
                 return []
             for item in news[:max_items]:
-                # Handle both yfinance 1.0 (item['content']['title']) and legacy (item['title'])
                 title = item.get("title")
                 if not title and isinstance(item.get("content"), dict):
                     title = item["content"].get("title")
@@ -665,6 +692,8 @@ class DataLake:
         Returns mean sentiment in [-1, 1]:
             positive → +1, neutral → 0, negative → -1.
         """
+        if self._sentiment_engine == "vader_fallback":
+            return self._score_vader(headlines)
         if self._sentiment_engine is None:
             try:
                 import torch
@@ -687,8 +716,9 @@ class DataLake:
                 }
                 logger.info("FinBERT loaded ✓  (device=%s)", device)
 
-            except ImportError:
-                logger.warning("transformers/torch not available — falling back to VADER")
+            except Exception as exc:
+                logger.warning("FinBERT unavailable: %s — falling back to VADER", exc)
+                self._sentiment_engine = "vader_fallback"
                 self.sentiment_backend = "vader"
                 return self._score_vader(headlines)
 
