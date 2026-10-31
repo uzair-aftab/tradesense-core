@@ -1,20 +1,20 @@
 """
-TradeSense Institutional War Room — State-of-the-Art Live Trading Cockpit
-==========================================================================
-
-Institutional-grade Streamlit trading cockpit featuring:
-- Real-time live streaming market data and jump-diffusion microstructure simulation
-- Real-time tick-by-tick Candlestick + Quantile Cloud (P10/P50/P90) charting via @st.fragment
-- Autonomous Sniper Execution Engine with OCO bracket orders and ratcheting trailing stops
-- Institutional Strategy Tournament Arena competing 5 hedge-fund quant algorithms
-- Deep Learning & Simulated / Dummy Training Studio with quantile calibration
-- Multi-Asset Market Radar with Institutional Whale Order-Flow detection
+TradeSense v6 — Minimalist Frosted-Glass Wealthsimple Cockpit
+=============================================================
+Unified, elegant trading workspace engineered for Wealthsimple mobile execution:
+  1. Passwordless Multi-Account Profile Gate (Uzair, Waleed, + Add Account)
+  2. Minimalist Frosted Glassmorphism UI (Obsidian dark canvas, translucent specular panes)
+  3. Interactive Chart Manipulation Suite (Plotly modebar, scroll zoom, toolbar presets, indicators)
+  4. Genuine 8-Model ML/DL Quant Zoo & Custom Combinations (PyTorch DL, GBDT, Kernels, Econometrics)
+  5. Multi-Pair Net-EV Alpha Scanner & Quarter-Kelly Risk Sizer
+  6. Verified End-to-End Real Wealthsimple Order & Active Position Monitor
 """
 
 from __future__ import annotations
 
-import io
 import json
+import math
+import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -28,1884 +28,1440 @@ if _ROOT not in sys.path:
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import streamlit as st
 
-from src.config import config
-from src.data.auth import AuthManager
 from src.data.data_feed import DataLake
-from src.data.database import get_database
-from src.data.live_feed import LiveMarketFeed, MarketTick, StreamMode
-from src.data.watchlists import AssetCategory, WatchlistManager
-from src.models.ai_engine import AIEngine, QuantilePrediction
-from src.models.bot import AutonomousSniperBot, BotConfig, BotState
-from src.models.session_logger import SessionLogManager, BotSessionLogger
-from src.models.strategies import (
-    DeepQuantileSniper,
-    EnsembleAlpha,
-    InstitutionalWhaleFlow,
-    StatisticalMeanReversion,
-    StrategyArena,
-    VolatilityBreakout,
+from src.data.database import db_manager, get_database
+from src.data.market_intel import MarketIntelligenceEngine
+from src.data.profiles import ProfileManager, UserProfile
+from src.data.ws_catalog import (
+    CURATED_WS_ASSETS,
+    FeeEstimate,
+    WealthsimpleAsset,
+    WealthsimpleCatalog,
+    WealthsimpleFeeSchedule,
 )
-from src.models.trader import Gauntlet, Side, TradeOrder
-from src.models.wealthsimple_copier import WealthsimpleCopier, CanadianAssetProxy
+from src.models.adaptive_predictor import (
+    AdaptiveForecast,
+    AdaptivePredictionEngine,
+    AssetDNA,
+    adaptive_engine,
+)
+from src.models.model_zoo import (
+    ALL_QUANT_MODELS,
+    MODEL_PRESETS,
+    MODEL_REGISTRY,
+    ModelZooEngine,
+)
+from src.models.profit_engine import (
+    AlphaOpportunity,
+    AlphaScanner,
+    MarketHoursGuard,
+    PositionRiskSizer,
+    PositionSizeResult,
+    TrailingStopRatchet,
+)
+from src.models.regime import MarketRegime, RegimeClassifier
+from src.models.virtual_bot import (
+    BotEfficiencySummary,
+    VirtualBotEngine,
+    virtual_bot_engine,
+)
+from src.ui.chart_builder import PLOTLY_GLASS_CONFIG, build_interactive_chart
+from src.ui.clipboard import render_copy_card
 from src.utils.health import HealthCheck
 from src.utils.logger import get_logger
 
-logger = get_logger("hfp.ui")
+logger = get_logger("hfp.ui_v6")
 
-# ---------------------------------------------------------------------------
-#  Page Config
-# ---------------------------------------------------------------------------
-st.set_page_config(
-    page_title="TradeSense Institutional Cockpit",
-    page_icon="⚡",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
 
-# ---------------------------------------------------------------------------
-#  State-of-the-Art Cyber-Dark Styling
-# ---------------------------------------------------------------------------
-st.markdown(
-    """
+def _format_chart_time_labels(dt_index: Any) -> List[str]:
+    """Guarantees unique category strings for chart x-axis across daily and intraday bars."""
+    labels = []
+    seen: Dict[str, int] = {}
+    for dt in dt_index:
+        ts = pd.to_datetime(dt)
+        if ts.hour == 0 and ts.minute == 0 and ts.second == 0:
+            base = ts.strftime("%b %d")
+        else:
+            base = ts.strftime("%b %d %H:%M")
+        if base in seen:
+            seen[base] += 1
+            labels.append(f"{base} #{seen[base]}")
+        else:
+            seen[base] = 1
+            labels.append(base)
+    return labels
+
+
+def run_app() -> None:
+    # ─────────────────────────────────────────────────────────────────────────────
+    # 1. Page Configuration & Obsidian Frosted Glass Stylesheet
+    # ─────────────────────────────────────────────────────────────────────────────
+    st.set_page_config(
+        page_title="TradeSense — Wealthsimple Alpha & AI Execution",
+        page_icon="💎",
+        layout="wide",
+        initial_sidebar_state="collapsed",
+    )
+
+    GLASS_CSS = """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
-
-    /* Global application canvas */
+    /* ── Obsidian Glass Canvas ── */
     .stApp {
-        background: radial-gradient(circle at 15% 15%, #0f172a 0%, #080d1a 50%, #030712 100%);
-        font-family: 'Plus Jakarta Sans', sans-serif;
-        color: #f1f5f9;
+        background-color: #050811 !important;
+        background-image: 
+            radial-gradient(at 0% 0%, rgba(56, 189, 248, 0.08) 0px, transparent 50%),
+            radial-gradient(at 100% 100%, rgba(52, 211, 153, 0.06) 0px, transparent 50%) !important;
+        color: #e2e8f0 !important;
+        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif !important;
     }
 
-    /* Glassmorphism metric cards */
-    div[data-testid="stMetric"] {
-        background: rgba(15, 23, 42, 0.65);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
-        border: 1px solid rgba(59, 130, 246, 0.2);
+    /* ── Hide Sidebar & Default Chrome Clutter ── */
+    [data-testid="stSidebar"] {
+        display: none !important;
+    }
+    #MainMenu, footer, header {
+        visibility: hidden !important;
+    }
+    .block-container {
+        padding-top: 1.0rem !important;
+        padding-bottom: 2.0rem !important;
+        max-width: 1540px !important;
+    }
+
+    /* ── True Frosted Glass Containers ── */
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        background: linear-gradient(145deg, rgba(255, 255, 255, 0.045) 0%, rgba(255, 255, 255, 0.015) 100%) !important;
+        backdrop-filter: blur(28px) saturate(165%) !important;
+        -webkit-backdrop-filter: blur(28px) saturate(165%) !important;
+        border: 1px solid rgba(255, 255, 255, 0.08) !important;
+        border-top: 1px solid rgba(255, 255, 255, 0.16) !important;
+        border-radius: 18px !important;
+        padding: 16px 20px !important;
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+        margin-bottom: 12px !important;
+    }
+
+    /* ── Typography & Monospace Accents ── */
+    .mono {
+        font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace !important;
+    }
+    .hero-price {
+        font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace !important;
+        font-size: 2.1rem !important;
+        font-weight: 700 !important;
+        letter-spacing: -0.03em !important;
+        color: #ffffff !important;
+        line-height: 1.1 !important;
+    }
+    .delta-pos {
+        color: #34d399 !important;
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 0.95rem !important;
+        font-weight: 600 !important;
+    }
+    .delta-neg {
+        color: #fb7185 !important;
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 0.95rem !important;
+        font-weight: 600 !important;
+    }
+
+    /* ── Glass Direction Strip ── */
+    .direction-strip {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.08);
         border-radius: 12px;
-        padding: 12px 18px;
-        transition: transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
-    }
-    div[data-testid="stMetric"]:hover {
-        border-color: rgba(59, 130, 246, 0.5);
-        transform: translateY(-2px);
-        box-shadow: 0 8px 24px rgba(37, 99, 235, 0.15);
-    }
-    div[data-testid="stMetricValue"] {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 1.45rem;
-        font-weight: 700;
-        letter-spacing: -0.5px;
-    }
-
-    /* Pulse indicators */
-    .pulse-live {
-        display: inline-block;
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        background: #10b981;
-        box-shadow: 0 0 12px #10b981;
-        animation: pulse 1.5s infinite;
-    }
-    .pulse-armed {
-        display: inline-block;
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        background: #ef4444;
-        box-shadow: 0 0 12px #ef4444;
-        animation: pulse 1.0s infinite;
-    }
-    @keyframes pulse {
-        0%, 100% { opacity: 1; transform: scale(1); }
-        50% { opacity: 0.4; transform: scale(0.85); }
-    }
-
-    /* Ticker ribbon */
-    .ticker-bar {
-        background: rgba(15, 23, 42, 0.85);
-        border: 1px solid rgba(148, 163, 184, 0.15);
-        border-radius: 12px;
-        padding: 10px 20px;
-        margin-bottom: 15px;
+        padding: 8px 16px;
+        font-size: 0.85rem;
+        color: #94a3b8;
         display: flex;
-        justify-content: space-between;
         align-items: center;
-        backdrop-filter: blur(12px);
+        justify-content: space-between;
+        margin-bottom: 14px;
+    }
+    .direction-strip b {
+        color: #38bdf8;
     }
 
-    /* Badges */
-    .whale-badge {
-        background: rgba(245, 158, 11, 0.2);
-        border: 1px solid #f59e0b;
-        color: #f59e0b;
-        padding: 3px 10px;
-        border-radius: 20px;
-        font-size: 0.75rem;
-        font-weight: 700;
-        letter-spacing: 1px;
+    /* ── Badges & Pills ── */
+    .dna-pill {
+        display: inline-block;
+        padding: 3px 9px;
+        border-radius: 9999px;
+        font-size: 0.74rem;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+        background: rgba(56, 189, 248, 0.12);
+        color: #38bdf8;
+        border: 1px solid rgba(56, 189, 248, 0.25);
     }
-    .bull-badge {
-        background: rgba(16, 185, 129, 0.2);
-        border: 1px solid #10b981;
-        color: #10b981;
-        padding: 3px 10px;
-        border-radius: 20px;
-        font-size: 0.75rem;
-        font-weight: 700;
+    .fee-badge {
+        display: inline-block;
+        padding: 3px 9px;
+        border-radius: 9999px;
+        font-size: 0.74rem;
+        font-weight: 600;
+        background: rgba(255, 255, 255, 0.05);
+        color: #cbd5e1;
+        border: 1px solid rgba(255, 255, 255, 0.12);
     }
-    .bear-badge {
-        background: rgba(239, 68, 68, 0.2);
-        border: 1px solid #ef4444;
-        color: #ef4444;
-        padding: 3px 10px;
-        border-radius: 20px;
-        font-size: 0.75rem;
-        font-weight: 700;
+    .regime-badge-bull {
+        display: inline-block;
+        padding: 3px 9px;
+        border-radius: 9999px;
+        font-size: 0.74rem;
+        font-weight: 600;
+        background: rgba(52, 211, 153, 0.12);
+        color: #34d399;
+        border: 1px solid rgba(52, 211, 153, 0.3);
     }
-    .chop-badge {
-        background: rgba(234, 179, 8, 0.2);
-        border: 1px solid #eab308;
-        color: #eab308;
-        padding: 3px 10px;
-        border-radius: 20px;
-        font-size: 0.75rem;
-        font-weight: 700;
+    .regime-badge-chop {
+        display: inline-block;
+        padding: 3px 9px;
+        border-radius: 9999px;
+        font-size: 0.74rem;
+        font-weight: 600;
+        background: rgba(251, 191, 36, 0.12);
+        color: #fbbf24;
+        border: 1px solid rgba(251, 191, 36, 0.3);
     }
-    .cash-badge {
-        background: rgba(239, 68, 68, 0.25);
-        border: 1px solid #ef4444;
-        color: #f87171;
-        padding: 3px 10px;
-        border-radius: 20px;
-        font-size: 0.75rem;
-        font-weight: 700;
+    .regime-badge-bear {
+        display: inline-block;
+        padding: 3px 9px;
+        border-radius: 9999px;
+        font-size: 0.74rem;
+        font-weight: 600;
+        background: rgba(251, 113, 133, 0.12);
+        color: #fb7185;
+        border: 1px solid rgba(251, 113, 133, 0.3);
     }
 
-    /* Sidebar aesthetics */
-    section[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #090e17 0%, #030712 100%);
-        border-right: 1px solid rgba(51, 65, 85, 0.5);
+    /* ── Readiness Badges ── */
+    .readiness-proven {
+        background: rgba(52, 211, 153, 0.15) !important;
+        color: #34d399 !important;
+        border: 1px solid rgba(52, 211, 153, 0.35) !important;
+        padding: 6px 12px !important;
+        border-radius: 10px !important;
+        font-weight: 700 !important;
+        font-size: 0.84rem !important;
+        text-align: center;
+    }
+    .readiness-calibrating {
+        background: rgba(251, 191, 36, 0.12) !important;
+        color: #fbbf24 !important;
+        border: 1px solid rgba(251, 191, 36, 0.30) !important;
+        padding: 6px 12px !important;
+        border-radius: 10px !important;
+        font-weight: 700 !important;
+        font-size: 0.84rem !important;
+        text-align: center;
+    }
+    .readiness-avoid {
+        background: rgba(251, 113, 133, 0.12) !important;
+        color: #fb7185 !important;
+        border: 1px solid rgba(251, 113, 133, 0.30) !important;
+        padding: 6px 12px !important;
+        border-radius: 10px !important;
+        font-weight: 700 !important;
+        font-size: 0.84rem !important;
+        text-align: center;
     }
 
-    /* Wealthsimple Mobile Copier Floating Pop-Up Card */
-    @keyframes slideUpCard {
-        0% { transform: translateY(40px); opacity: 0; }
-        100% { transform: translateY(0); opacity: 1; }
+    /* ── Plotly Frosted Glass Modebar ── */
+    .js-plotly-plot .plotly .modebar {
+        background: rgba(15, 23, 42, 0.72) !important;
+        border: 1px solid rgba(255, 255, 255, 0.12) !important;
+        border-radius: 10px !important;
+        padding: 2px 6px !important;
+        top: 8px !important;
+        right: 8px !important;
+        backdrop-filter: blur(12px) !important;
     }
-    .ws-floating-card {
-        background: linear-gradient(135deg, rgba(15, 23, 42, 0.96) 0%, rgba(30, 41, 59, 0.96) 100%);
-        border: 2px solid #10b981;
-        border-radius: 14px;
-        padding: 16px;
-        margin-top: 10px;
-        margin-bottom: 12px;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 16px rgba(16, 185, 129, 0.25);
-        animation: slideUpCard 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    .js-plotly-plot .plotly .modebar-btn path {
+        fill: #94a3b8 !important;
     }
-    .ws-exit-card {
-        border-color: #ef4444;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 16px rgba(239, 68, 68, 0.25);
+    .js-plotly-plot .plotly .modebar-btn:hover path {
+        fill: #38bdf8 !important;
+    }
+    .js-plotly-plot .plotly .modebar-btn.active path {
+        fill: #34d399 !important;
+    }
+
+    /* ── Streamlit Widget Overrides ── */
+    .stButton > button {
+        background: linear-gradient(145deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.03) 100%) !important;
+        color: #f1f5f9 !important;
+        border: 1px solid rgba(255, 255, 255, 0.14) !important;
+        border-radius: 10px !important;
+        font-weight: 600 !important;
+        transition: all 0.2s ease !important;
+    }
+    .stButton > button:hover {
+        background: rgba(56, 189, 248, 0.18) !important;
+        border-color: rgba(56, 189, 248, 0.45) !important;
+        color: #ffffff !important;
+    }
+    .stSelectbox div[data-baseweb="select"] {
+        background: rgba(15, 23, 42, 0.6) !important;
+        border: 1px solid rgba(255, 255, 255, 0.12) !important;
+        border-radius: 10px !important;
+        color: #ffffff !important;
     }
     </style>
-    """,
-    unsafe_allow_html=True,
-)
+    """
+    st.markdown(GLASS_CSS, unsafe_allow_html=True)
 
 
-# ---------------------------------------------------------------------------
-#  Session State Initialization
-# ---------------------------------------------------------------------------
-def _init_state() -> None:
-    """Ensure persistent session-state components exist."""
-    user = st.session_state.get("user")
-    user_id = user["id"] if user else None
+    # ─────────────────────────────────────────────────────────────────────────────
+    # 2. Database & Multi-Account Profile Management
+    # ─────────────────────────────────────────────────────────────────────────────
+    db = get_database()
+    db.init_db()
+    profile_mgr = ProfileManager(db)
+    profile_mgr.ensure_default_profiles()
 
-    if "db" not in st.session_state:
-        st.session_state.db = get_database()
+    # Check URL Query Param or Session State for Active Profile
+    query_user = st.query_params.get("user")
+    all_profiles = profile_mgr.list_profiles()
+    valid_ids = [p.profile_id for p in all_profiles]
 
-    if "copier" not in st.session_state:
-        st.session_state.copier = WealthsimpleCopier(db=st.session_state.db)
+    if query_user and query_user in valid_ids:
+        st.session_state["active_profile_id"] = query_user
+    elif "active_profile_id" not in st.session_state:
+        st.session_state["active_profile_id"] = None
 
-    if "lake" not in st.session_state:
-        st.session_state.lake = DataLake(sentiment_backend="vader")
 
-    if "engine" not in st.session_state:
-        st.session_state.engine = AIEngine(
-            lstm_epochs=config.LSTM_EPOCHS,
-            xgb_estimators=config.XGB_ESTIMATORS,
-            seq_len=config.LSTM_SEQ_LEN,
-        )
+    # ─────────────────────────────────────────────────────────────────────────────
+    # 3. Gate 0: Frosted-Glass Passwordless Profile Selector
+    # ─────────────────────────────────────────────────────────────────────────────
+    def render_glass_login_gate() -> None:
+        """Renders passwordless 1-click accounts portal for Uzair, Waleed, + Add."""
+        st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
+        c_center = st.columns([1, 2.8, 1])[1]
 
-    if "gauntlet" not in st.session_state or st.session_state.gauntlet.user_id != user_id:
-        cap = float(user["starting_capital"]) if user else config.STARTING_CAPITAL
-        st.session_state.gauntlet = Gauntlet(
-            starting_capital=cap,
-            persist=True,
-            user_id=user_id,
-        )
+        with c_center:
+            st.markdown(
+                """
+                <div style="text-align: center; margin-bottom: 24px;">
+                    <div style="display: inline-block; margin-bottom: 12px;">
+                        <svg width="68" height="68" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <polygon points="50,6 92,28 92,72 50,94 8,72 8,28" stroke="url(#prismGrad)" stroke-width="3.5" fill="rgba(56, 189, 248, 0.08)"/>
+                            <polygon points="50,18 80,34 80,66 50,82 20,66 20,34" stroke="url(#prismGrad2)" stroke-width="2" fill="rgba(52, 211, 153, 0.05)"/>
+                            <line x1="50" y1="6" x2="50" y2="94" stroke="rgba(255, 255, 255, 0.25)" stroke-width="1.5" stroke-dasharray="3 3"/>
+                            <line x1="8" y1="50" x2="92" y2="50" stroke="rgba(255, 255, 255, 0.25)" stroke-width="1.5" stroke-dasharray="3 3"/>
+                            <circle cx="50" cy="50" r="8" fill="#38bdf8"/>
+                            <defs>
+                                <linearGradient id="prismGrad" x1="0" y1="0" x2="100" y2="100" gradientUnits="userSpaceOnUse">
+                                    <stop stop-color="#38bdf8"/>
+                                    <stop offset="0.5" stop-color="#a78bfa"/>
+                                    <stop offset="1" stop-color="#34d399"/>
+                                </linearGradient>
+                                <linearGradient id="prismGrad2" x1="100" y1="0" x2="0" y2="100" gradientUnits="userSpaceOnUse">
+                                    <stop stop-color="#34d399"/>
+                                    <stop offset="1" stop-color="#38bdf8"/>
+                                </linearGradient>
+                            </defs>
+                        </svg>
+                    </div>
+                    <h1 style="font-size: 2.3rem; font-weight: 800; letter-spacing: -0.04em; margin: 0; color: #ffffff;">TradeSense</h1>
+                    <p style="color: #94a3b8; font-size: 0.95rem; margin-top: 6px;">Institutional Wealthsimple Alpha • 8-Model ML/DL Quant Zoo</p>
+                    <div style="font-size: 0.78rem; color: #38bdf8; letter-spacing: 0.08em; text-transform: uppercase; margin-top: 2px;">Passwordless Multi-Account Portal</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
-    if "watchlist" not in st.session_state:
-        st.session_state.watchlist = WatchlistManager()
+            with st.container(border=True):
+                st.markdown("<div style='font-size: 0.88rem; font-weight: 600; color: #cbd5e1; margin-bottom: 12px; text-align: center;'>Select Your Profile to Enter Workspace</div>", unsafe_allow_html=True)
 
-    # Load persistent settings if available
-    saved_ticker = "BTC-CAD"
-    saved_strategy = "Ensemble Alpha"
-    if user_id:
-        try:
-            s_dict = st.session_state.db.get_user_settings(user_id)
-            saved_ticker = s_dict.get("active_ticker") or "BTC-CAD"
-            saved_strategy = s_dict.get("active_strategy") or "Ensemble Alpha"
-        except Exception:
-            pass
+                card_cols = st.columns(len(all_profiles) + 1)
+                for idx, p in enumerate(all_profiles):
+                    with card_cols[idx]:
+                        acct = db.get_or_create_virtual_account(p.profile_id)
+                        cash = float(acct["virtual_cash_cad"])
+                        positions = db.get_virtual_positions(p.profile_id)
 
-    if "ticker" not in st.session_state:
-        st.session_state.ticker = saved_ticker
+                        st.markdown(
+                            f"""
+                            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-top: 2px solid {p.accent_color}; border-radius: 12px; padding: 12px 10px; text-align: center; margin-bottom: 8px;">
+                                <div style="width: 42px; height: 42px; border-radius: 9999px; background: {p.accent_color}22; border: 1px solid {p.accent_color}; color: {p.accent_color}; font-weight: 700; font-size: 1.05rem; display: flex; align-items: center; justify-content: center; margin: 0 auto 8px auto;">
+                                    {p.avatar_initials}
+                                </div>
+                                <div style="font-weight: 700; font-size: 1.05rem; color: #ffffff;">{p.display_name}</div>
+                                <div class="mono" style="font-size: 0.85rem; color: {p.accent_color}; font-weight: 600; margin-top: 2px;">${cash:,.0f} CAD</div>
+                                <div style="font-size: 0.70rem; color: #64748b; margin-top: 2px;">{len(positions)} open • {p.ws_tier}</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                        if st.button(f"Enter as {p.display_name}", key=f"btn_enter_{p.profile_id}", use_container_width=True):
+                            st.session_state["active_profile_id"] = p.profile_id
+                            st.query_params["user"] = p.profile_id
+                            st.rerun()
 
-    if "active_strategy" not in st.session_state:
-        st.session_state.active_strategy = saved_strategy
+                # Add Account Column
+                with card_cols[-1]:
+                    st.markdown(
+                        """
+                        <div style="background: rgba(255, 255, 255, 0.015); border: 1px dashed rgba(255, 255, 255, 0.15); border-radius: 12px; padding: 12px 10px; text-align: center; margin-bottom: 8px; height: 136px; display: flex; flex-direction: column; justify-content: center; align-items: center;">
+                            <div style="font-size: 1.8rem; color: #94a3b8; line-height: 1;">＋</div>
+                            <div style="font-weight: 600; font-size: 0.88rem; color: #94a3b8; margin-top: 6px;">New Account</div>
+                            <div style="font-size: 0.68rem; color: #64748b;">Instant Isolated Wallet</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    with st.popover("＋ Add", use_container_width=True):
+                        st.markdown("##### ＋ Create New Trading Profile")
+                        new_name = st.text_input("Profile Display Name", placeholder="e.g. Sarah, Alex, Bilal")
+                        new_cap = st.number_input("Starting Virtual Capital ($ CAD)", value=10000.0, step=1000.0)
+                        new_tier = st.selectbox("Wealthsimple Tier", options=["Core", "Premium", "Generation"])
+                        if st.button("Create Profile & Enter", use_container_width=True):
+                            if new_name.strip():
+                                new_p = profile_mgr.create_profile(new_name.strip(), starting_cad=new_cap, ws_tier=new_tier)
+                                st.session_state["active_profile_id"] = new_p.profile_id
+                                st.query_params["user"] = new_p.profile_id
+                                st.rerun()
+                            else:
+                                st.error("Please enter a valid display name.")
 
+
+    if st.session_state.get("active_profile_id") is None:
+        render_glass_login_gate()
+        st.stop()
+        # Fallback for bare module import under pytest
+        active_profile = profile_mgr.get_profile("uzair")
+    else:
+        active_profile_id = st.session_state["active_profile_id"]
+        active_profile = profile_mgr.get_profile(active_profile_id)
+        if not active_profile:
+            active_profile = profile_mgr.get_profile("uzair")
+
+    USER_ID = active_profile.profile_id if active_profile else "uzair"
+    st.query_params["user"] = USER_ID
+
+    # Virtual Account & Profile Sync
+    acct_info = db.get_or_create_virtual_account(USER_ID)
+    if "ws_tier" not in st.session_state:
+        st.session_state["ws_tier"] = active_profile.ws_tier
+    if "usd_account" not in st.session_state:
+        st.session_state["usd_account"] = active_profile.usd_account_active
+    if "is_armed" not in st.session_state:
+        st.session_state["is_armed"] = bool(acct_info.get("is_armed", 1))
+    if "active_symbol" not in st.session_state:
+        st.session_state["active_symbol"] = active_profile.active_symbol
     if "timeframe" not in st.session_state:
-        st.session_state.timeframe = config.DEFAULT_TIMEFRAME
+        st.session_state["timeframe"] = active_profile.active_timeframe
+    if "horizon_bars" not in st.session_state:
+        st.session_state["horizon_bars"] = active_profile.horizon_bars
+    if "view_mode" not in st.session_state:
+        st.session_state["view_mode"] = "Workspace"
+    if "chart_type" not in st.session_state:
+        st.session_state["chart_type"] = "Candles"
+    if "chart_visible_bars" not in st.session_state:
+        st.session_state["chart_visible_bars"] = 80
+    if "chart_overlays" not in st.session_state:
+        st.session_state["chart_overlays"] = ["EMA 9 & 21", "VWAP"]
+    if "model_preset" not in st.session_state:
+        st.session_state["model_preset"] = active_profile.model_preset
+    if "selected_models" not in st.session_state:
+        st.session_state["selected_models"] = active_profile.selected_models or ["dl_bilstm_attn", "ml_xgboost_quantile", "ml_gbdt_forest"]
+    if "blending_mode" not in st.session_state:
+        st.session_state["blending_mode"] = active_profile.blending_mode
+    if "allocated_capital" not in st.session_state:
+        st.session_state["allocated_capital"] = 500.0
+    if "eval_cache" not in st.session_state:
+        st.session_state["eval_cache"] = {}
 
-    if "lookback" not in st.session_state:
-        st.session_state.lookback = config.DEFAULT_LOOKBACK
 
-    if "live_streaming" not in st.session_state:
-        st.session_state.live_streaming = True
-
-    if "stream_mode" not in st.session_state:
-        st.session_state.stream_mode = StreamMode.SYNTHETIC_MICROSTRUCTURE
-
-    if "raw_df" not in st.session_state or st.session_state.raw_df is None:
-        _load_default_asset()
-
-    if "feed" not in st.session_state:
-        st.session_state.feed = LiveMarketFeed(
-            ticker=st.session_state.ticker,
-            mode=st.session_state.stream_mode,
-            base_df=st.session_state.raw_df,
-        )
-
-    if "bot" not in st.session_state:
-        st.session_state.bot = AutonomousSniperBot(
-            feed=st.session_state.feed,
-            strategy=EnsembleAlpha(),
-            config=BotConfig(
-                symbol=st.session_state.ticker,
-                initial_balance=st.session_state.gauntlet.starting_capital,
-                risk_per_trade=0.02,
-                min_confidence=0.70,
-                min_rrr=1.5,
-            ),
-            persist_portfolio=False,
-            ai_engine=st.session_state.engine,
-        )
-
-    if "prediction" not in st.session_state:
-        st.session_state.prediction = None
-
-    if "arena_results" not in st.session_state:
-        st.session_state.arena_results = None
-
-    # Auto-load latest model weights if available
-    if not st.session_state.get("trained", False):
+    # ─────────────────────────────────────────────────────────────────────────────
+    # 5. Data Fetching Helper
+    # ─────────────────────────────────────────────────────────────────────────────
+    @st.cache_data(ttl=120, show_spinner=False)
+    def fetch_asset_history(symbol: str, timeframe: str = "1h") -> pd.DataFrame:
+        """Fetches real or synthetic candlestick history for an asset."""
+        lake = DataLake()
         try:
-            st.session_state.engine.load("latest")
-            st.session_state.trained = True
-            logger.info("Auto-loaded pre-trained AI Engine weights from models/hfp/latest")
-        except Exception as e:
-            logger.info("Could not load pre-trained AI Engine weights: %s", e)
+            lb = "30d" if timeframe == "15m" else ("90d" if timeframe == "1h" else "1y")
+            df = lake.pipeline(symbol, timeframe=timeframe, lookback=lb, include_sentiment=False, normalise=False)
+            if df is not None and len(df) >= 20:
+                return df
+        except Exception as exc:
+            logger.debug("DataLake pipeline error for %s: %s", symbol, exc)
 
-    if st.session_state.get("prediction") is None and st.session_state.get("trained", False) and st.session_state.get("feat_df") is not None:
-        try:
-            st.session_state.prediction = st.session_state.engine.predict(st.session_state.feat_df)
-        except Exception as e:
-            logger.info("Initial prediction generation error: %s", e)
+        periods = 100
+        freq = "15min" if timeframe == "15m" else ("h" if timeframe == "1h" else "D")
+        dates = pd.date_range(end=pd.Timestamp.now(tz="UTC"), periods=periods, freq=freq)
+        base = 135000.0 if "BTC" in symbol else (3800.0 if "ETH" in symbol else (150.0 if ".TO" in symbol else 180.0))
+        rng = np.random.default_rng(abs(hash(symbol)) % 10000)
+        returns = rng.normal(0.0003, 0.012, periods)
+        price_curve = base * np.exp(np.cumsum(returns))
+
+        return pd.DataFrame({
+            "Open": price_curve * (1.0 - rng.uniform(0.0, 0.003, periods)),
+            "High": price_curve * (1.0 + rng.uniform(0.001, 0.008, periods)),
+            "Low": price_curve * (1.0 - rng.uniform(0.001, 0.008, periods)),
+            "Close": price_curve,
+            "Volume": rng.uniform(1000, 50000, periods),
+        }, index=dates)
 
 
-def _load_default_asset() -> None:
-    """Pre-load or generate realistic base asset history."""
-    lake: DataLake = st.session_state.lake
-    ticker = st.session_state.ticker
-    try:
-        raw = lake.fetch(ticker, timeframe=st.session_state.timeframe, lookback="6mo")
-        feat = lake.engineer_features(raw, ticker=ticker, include_sentiment=False)
-        feat.ffill(inplace=True)
-        feat.bfill(inplace=True)
-        feat.dropna(inplace=True)
-        st.session_state.raw_df = raw
-        st.session_state.feat_df = feat
-    except Exception as e:
-        logger.warning("Could not fetch live default asset (%s), creating synthetic: %s", ticker, e)
-        # Create rich synthetic baseline
-        dates = pd.date_range(end=datetime.now(timezone.utc), periods=120, freq="1D")
-        p0 = 100_000.0 if "BTC" in ticker else 180.0
-        shocks = np.random.normal(0.001, 0.02, size=len(dates))
-        prices = p0 * np.exp(np.cumsum(shocks))
-        raw = pd.DataFrame(
-            {
-                "Open": prices * 0.995,
-                "High": prices * 1.015,
-                "Low": prices * 0.985,
-                "Close": prices,
-                "Volume": np.random.uniform(50_000, 300_000, size=len(dates)),
-                "Whale_Flag": [1 if i % 14 == 0 else 0 for i in range(len(dates))],
-                "Whale_Z": [3.2 if i % 14 == 0 else 0.4 for i in range(len(dates))],
-            },
-            index=dates,
+    # ─────────────────────────────────────────────────────────────────────────────
+    # 6. Top Glass Command Bar
+    # ─────────────────────────────────────────────────────────────────────────────
+    top_col1, top_col2, top_col3, top_col4 = st.columns([4.2, 1.8, 2.8, 1.2])
+
+    # 6.1 Profile Pill & Asset Selector
+    curated_assets = WealthsimpleCatalog.list_curated()
+    asset_options = [
+        f"{a.symbol} — {a.name} ({a.category.replace('_', ' ')} • {a.currency})"
+        for a in curated_assets
+    ]
+    curr_sym = st.session_state["active_symbol"]
+    curr_idx = 0
+    for idx, opt in enumerate(asset_options):
+        if opt.startswith(curr_sym + " —"):
+            curr_idx = idx
+            break
+
+    with top_col1:
+        c_prof, c_sel, c_pop = st.columns([1.8, 4.8, 0.8])
+        with c_prof:
+            with st.popover(f"👤 {active_profile.display_name} ▾", use_container_width=True):
+                st.markdown(f"#### 👤 {active_profile.display_name}")
+                st.caption(f"Virtual Cash: **${float(acct_info['virtual_cash_cad']):,.2f} CAD**")
+                st.caption(f"Tier: **{active_profile.ws_tier}** • Blending: **{active_profile.blending_mode}**")
+                st.divider()
+                if st.button("🔄 Switch Account", use_container_width=True):
+                    st.session_state["active_profile_id"] = None
+                    st.query_params.clear()
+                    st.rerun()
+
+        with c_sel:
+            selected_opt = st.selectbox(
+                "Select Asset",
+                options=asset_options,
+                index=curr_idx,
+                label_visibility="collapsed",
+                key="asset_selector",
+            )
+            if selected_opt:
+                new_sym = selected_opt.split(" —")[0].strip()
+                if new_sym != st.session_state["active_symbol"]:
+                    st.session_state["active_symbol"] = new_sym
+                    active_profile.active_symbol = new_sym
+                    profile_mgr.save_profile(active_profile)
+                    st.rerun()
+
+        with c_pop:
+            with st.popover("🔍", help="Lookup any Wealthsimple-tradeable TSX/US/NEO/Crypto ticker"):
+                custom_query = st.text_input("Enter Ticker or Name", placeholder="e.g. SHOP, NVDA, SOL")
+                if custom_query:
+                    results = WealthsimpleCatalog.search_assets(custom_query, limit=8)
+                    if results:
+                        st.caption("Matches:")
+                        for r in results:
+                            if st.button(f"{r.symbol} — {r.name[:24]}", key=f"btn_search_{r.symbol}"):
+                                st.session_state["active_symbol"] = r.symbol
+                                st.rerun()
+                    else:
+                        st.info("No matching Wealthsimple ticker found.")
+
+    # 6.2 Timeframe Selector
+    with top_col2:
+        tf_opts = ["15m", "1h", "1D"]
+        tf_idx = tf_opts.index(st.session_state["timeframe"]) if st.session_state["timeframe"] in tf_opts else 1
+        selected_tf = st.radio(
+            "Timeframe",
+            options=tf_opts,
+            index=tf_idx,
+            horizontal=True,
+            label_visibility="collapsed",
+            key="tf_radio",
         )
-        st.session_state.raw_df = raw
-        st.session_state.feat_df = raw.copy()
+        if selected_tf != st.session_state["timeframe"]:
+            st.session_state["timeframe"] = selected_tf
+            active_profile.active_timeframe = selected_tf
+            profile_mgr.save_profile(active_profile)
+            st.rerun()
+
+    # 6.3 View Switcher
+    with top_col3:
+        v_opts = ["Workspace", "ML/DL Lab & Scanner", "Portfolios & Leaderboard"]
+        v_idx = v_opts.index(st.session_state["view_mode"]) if st.session_state["view_mode"] in v_opts else 0
+        selected_view = st.radio(
+            "View Mode",
+            options=v_opts,
+            index=v_idx,
+            horizontal=True,
+            label_visibility="collapsed",
+            key="view_radio",
+        )
+        if selected_view != st.session_state["view_mode"]:
+            st.session_state["view_mode"] = selected_view
+            st.rerun()
+
+    # 6.4 Top Setups & Settings Popover
+    with top_col4:
+        c_setups, c_gear = st.columns(2)
+        with c_setups:
+            with st.popover("🔥", help="Top Net-EV Alpha Setups"):
+                st.markdown("##### 🔥 Top Wealthsimple Net-EV Alpha")
+                top_setups = AlphaScanner.scan_opportunities(basket=["BTC-CAD", "ETH-CAD", "SHOP.TO", "NVDA.NE", "QQQ"])[:4]
+                if top_setups:
+                    for opp in top_setups:
+                        st.markdown(
+                            f"""
+                            <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 6px 10px; margin-bottom: 6px;">
+                                <div style="display: flex; justify-content: space-between;">
+                                    <b>{opp.symbol}</b>
+                                    <span style="color: {'#34d399' if opp.net_ev_pct > 0 else '#fb7185'}; font-weight: 700;">Net EV {opp.net_ev_pct:+.2f}%</span>
+                                </div>
+                                <div style="font-size: 0.72rem; color: #94a3b8;">${opp.current_price:,.2f} ➔ ${opp.target_price:,.2f} ({opp.action})</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                        if st.button(f"Load {opp.symbol}", key=f"btn_pop_load_{opp.symbol}"):
+                            st.session_state["active_symbol"] = opp.symbol
+                            st.rerun()
+
+        with c_gear:
+            with st.popover("⚙️", help="Virtual Wallet, Wealthsimple Tier, and Preferences"):
+                st.markdown("##### ⚙️ Trading & Account Settings")
+                tier_choice = st.selectbox(
+                    "Wealthsimple Account Tier",
+                    options=["Core", "Premium", "Generation"],
+                    index=["Core", "Premium", "Generation"].index(st.session_state["ws_tier"]),
+                )
+                usd_toggle = st.checkbox("USD Account Active ($0 per-trade FX)", value=st.session_state["usd_account"])
+
+                if tier_choice != st.session_state["ws_tier"] or usd_toggle != st.session_state["usd_account"]:
+                    st.session_state["ws_tier"] = tier_choice
+                    st.session_state["usd_account"] = usd_toggle
+                    active_profile.ws_tier = tier_choice
+                    active_profile.usd_account_active = usd_toggle
+                    profile_mgr.save_profile(active_profile)
+                    db.update_virtual_account(USER_ID, ws_tier=tier_choice, usd_account_active=usd_toggle)
+                    st.rerun()
+
+                st.divider()
+                st.markdown("##### 💼 Virtual Portfolio")
+                st.write(f"Cash: **${float(acct_info['virtual_cash_cad']):,.2f} CAD**")
+                new_start_cash = st.number_input(
+                    "Reset Capital ($ CAD)",
+                    min_value=1000.0,
+                    max_value=250000.0,
+                    value=float(acct_info.get("starting_virtual_cad", 10000.0)),
+                    step=1000.0,
+                )
+                if st.button("Reset Virtual Wallet", use_container_width=True):
+                    db.reset_virtual_wallet(USER_ID, starting_cash=new_start_cash)
+                    st.success(f"Virtual wallet reset to ${new_start_cash:,.2f} CAD!")
+                    st.rerun()
+
+                st.divider()
+                st.markdown("##### 🖥️ Live Telemetry")
+                gpu_info = HealthCheck.check_gpu()
+                ram_info = HealthCheck.check_memory()
+                if gpu_info.get("available"):
+                    st.caption(f"GPU: **{gpu_info.get('device_name')}** ({gpu_info.get('used_gb'):.1f}/{gpu_info.get('total_gb'):.1f} GB)")
+                else:
+                    st.caption("GPU: **CPU Fallback / Cloud Container**")
+                st.caption(f"RAM: **{ram_info.get('used')}/{ram_info.get('total')}** ({ram_info.get('percent')}%)")
+                st.caption("Database: **SQLite WAL Engine**")
 
 
-def _render_auth_portal(auth: AuthManager) -> None:
-    """Render institutional glassmorphism login & sign-up portal."""
+    # ─────────────────────────────────────────────────────────────────────────────
+    # 7. Core Calculations & Data Feed
+    # ─────────────────────────────────────────────────────────────────────────────
+    active_symbol = st.session_state["active_symbol"]
+    active_asset = WealthsimpleCatalog.resolve_asset(active_symbol)
+    active_timeframe = st.session_state["timeframe"]
+    horizon_bars = st.session_state["horizon_bars"]
+
+    df_bars = fetch_asset_history(active_symbol, active_timeframe)
+    current_price = float(df_bars["Close"].iloc[-1])
+    prev_price = float(df_bars["Close"].iloc[-2]) if len(df_bars) > 1 else current_price
+    bar_delta_pct = ((current_price - prev_price) / prev_price) * 100.0
+
+    # True 24-hour return computation
+    bars_in_24h = (
+        96 if active_timeframe == "15m" and active_asset.category == "CRYPTO"
+        else (26 if active_timeframe == "15m"
+        else (24 if active_timeframe == "1h" and active_asset.category == "CRYPTO"
+        else (7 if active_timeframe == "1h" else 1)))
+    )
+    idx_24h = max(0, len(df_bars) - bars_in_24h)
+    price_24h_ago = float(df_bars["Close"].iloc[idx_24h])
+    price_24h_pct = ((current_price - price_24h_ago) / price_24h_ago) * 100.0
+
+    # Market Hours & Execution Safety Guard
+    market_status = MarketHoursGuard.get_market_status(active_asset)
+
+    # Regime Analysis
+    regime_result = RegimeClassifier().classify(df_bars)
+    active_regime: MarketRegime = regime_result.regime
+
+    # Determine Active Models for Ensemble
+    preset_choice = st.session_state["model_preset"]
+    if preset_choice == "AUTO_DNA":
+        hurst_val = 0.58 if active_regime == MarketRegime.BULL_TREND else 0.48
+        ensemble_model_ids = ModelZooEngine.get_auto_models_for_asset(active_asset, hurst_val)
+    elif preset_choice in MODEL_PRESETS and "models" in MODEL_PRESETS[preset_choice]:
+        ensemble_model_ids = MODEL_PRESETS[preset_choice]["models"]
+    else:
+        ensemble_model_ids = st.session_state["selected_models"]
+        if not ensemble_model_ids:
+            ensemble_model_ids = ["dl_bilstm_attn", "ml_xgboost_quantile", "ml_gbdt_forest"]
+
+    # Train/Evaluate Quant Zoo
+    quant_zoo_results = ModelZooEngine.train_and_evaluate(
+        df=df_bars,
+        asset=active_asset,
+        selected_model_ids=ensemble_model_ids,
+        horizon_bars=horizon_bars,
+        blending_mode=st.session_state["blending_mode"],
+    )
+
+    consensus_p10 = quant_zoo_results["consensus_p10"]
+    consensus_p50 = quant_zoo_results["consensus_p50"]
+    consensus_p90 = quant_zoo_results["consensus_p90"]
+    consensus_exp_return_pct = round(((consensus_p50 - current_price) / current_price) * 100.0, 2)
+    consensus_direction = "BULLISH" if consensus_exp_return_pct >= 0.25 else ("BEARISH" if consensus_exp_return_pct <= -0.25 else "NEUTRAL")
+
+    # Legacy forecast compatibility for virtual bot
+    forecast = adaptive_engine.compute_adaptive_forecast(
+        df=df_bars,
+        asset=active_asset,
+        timeframe=active_timeframe,
+        horizon_bars=horizon_bars,
+    )
+    forecast.p10 = consensus_p10
+    forecast.p50 = consensus_p50
+    forecast.p90 = consensus_p90
+    forecast.expected_return_pct = consensus_exp_return_pct
+    forecast.direction = consensus_direction
+
+    # Efficiency Summary & Virtual Bot
+    eval_key = f"{active_symbol}_{active_timeframe}_{horizon_bars}_{st.session_state['ws_tier']}_{st.session_state['usd_account']}"
+    if eval_key not in st.session_state["eval_cache"]:
+        st.session_state["eval_cache"][eval_key] = virtual_bot_engine.evaluate_pair_efficiency(
+            df=df_bars,
+            asset=active_asset,
+            timeframe=active_timeframe,
+            horizon_bars=horizon_bars,
+            eval_bars=50,
+            starting_cad=10000.0,
+            ws_tier=st.session_state["ws_tier"],
+            usd_account=st.session_state["usd_account"],
+        )
+    efficiency_summary: BotEfficiencySummary = st.session_state["eval_cache"][eval_key]
+
+    # Live Auto-Tick Execution if Armed
+    if st.session_state["is_armed"]:
+        virtual_bot_engine.on_live_tick(
+            user_id=USER_ID,
+            asset=active_asset,
+            current_price=current_price,
+            forecast=forecast,
+        )
+
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # 8. Direction Flow Banner
+    # ─────────────────────────────────────────────────────────────────────────────
+    regime_badge_html = (
+        '<span class="regime-badge-bull">🟢 BULL TREND</span>' if active_regime == MarketRegime.BULL_TREND
+        else ('<span class="regime-badge-chop">🟡 RANGING CHOP</span>' if active_regime == MarketRegime.RANGING_CHOP
+        else '<span class="regime-badge-bear">🔴 BEAR CASH LOCK</span>')
+    )
     st.markdown(
-        """
-        <div style="max-width: 520px; margin: 40px auto 20px auto; text-align: center;">
-            <div style="font-size: 3.5rem; margin-bottom: 8px;">⚡</div>
-            <h1 style="margin: 0; font-size: 2.4rem; font-weight: 800; background: linear-gradient(135deg, #38bdf8 0%, #10b981 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
-                TRADESENSE
-            </h1>
-            <p style="color: #94a3b8; font-size: 0.95rem; margin-top: 6px;">
-                Institutional Quantitative Cockpit & Wealthsimple Mobile Copier
-            </p>
-            <div style="display: inline-block; background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.35); border-radius: 20px; padding: 4px 14px; font-size: 0.8rem; color: #38bdf8; margin-top: 4px;">
-                🇨🇦 North York, Ontario • Persistent SQLite Database • F5 Protected
-            </div>
+        f"""
+        <div class="direction-strip">
+            <span><b>Step 1: Quant Zoo</b> ➔ {consensus_direction} ({consensus_exp_return_pct:+.2f}% to ${consensus_p50:,.2f}) • {regime_badge_html}</span>
+            <span><b>Step 2: Virtual Proof</b> ➔ {efficiency_summary.trades_count} Trades • {efficiency_summary.win_rate_pct:.0f}% Win Rate</span>
+            <span><b>Step 3: Wealthsimple</b> ➔ {market_status['msg']}</span>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    col_l, col_center, col_r = st.columns([1, 1.8, 1])
-    with col_center:
-        auth_tab1, auth_tab2 = st.tabs(["🔐 Sign In", "✨ Create Account"])
 
-        with auth_tab1:
-            st.markdown("##### Sign in to your account")
-            login_user = st.text_input("Username", key="login_username_input").strip()
-            login_pwd = st.text_input("Password", type="password", key="login_pwd_input").strip()
-            if st.button("🚀 Access Trading Cockpit", key="login_submit_btn", type="primary", use_container_width=True):
-                if not login_user or not login_pwd:
-                    st.error("Please enter both username and password.")
-                else:
-                    user = auth.authenticate_user(login_user, login_pwd)
-                    if user:
-                        st.query_params["session"] = user["session_token"]
-                        st.session_state.user = user
-                        st.toast(f"Welcome back, {user['username']}! Initializing cockpit...", icon="⚡")
-                        time.sleep(0.4)
+    # ─────────────────────────────────────────────────────────────────────────────
+    # 9. VIEW 1: WORKSPACE (Minimalist 3 Frosted-Glass Panes)
+    # ─────────────────────────────────────────────────────────────────────────────
+    if st.session_state["view_mode"] == "Workspace":
+        left_col, right_col = st.columns([6.2, 3.8])
+
+        # ══════════════════════════════════════════════════════════════════════════
+        # PANE 1 (Left): Live Price, Interactive Chart & Model Combo
+        # ══════════════════════════════════════════════════════════════════════════
+        with left_col:
+            with st.container(border=True):
+                # Asset Header
+                h_col1, h_col2 = st.columns([7.2, 2.8])
+                with h_col1:
+                    st.markdown(
+                        f"""
+                        <div style="display: flex; align-items: baseline; gap: 10px; margin-bottom: 2px;">
+                            <span style="font-size: 1.35rem; font-weight: 700; color: #ffffff;">{active_asset.name}</span>
+                            <span class="mono" style="color: #94a3b8; font-size: 1.0rem;">{active_asset.ws_display_symbol}</span>
+                            <span class="dna-pill">{forecast.dna_profile}</span>
+                            <span class="fee-badge">{market_status['phase']}</span>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    d24_class = "delta-pos" if price_24h_pct >= 0 else "delta-neg"
+                    d1b_class = "delta-pos" if bar_delta_pct >= 0 else "delta-neg"
+                    curr_sign = "$" if active_asset.currency == "CAD" else "US$"
+
+                    st.markdown(
+                        f"""
+                        <div style="display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px;">
+                            <span class="hero-price">{curr_sign}{current_price:,.2f}</span>
+                            <span class="{d24_class}">{price_24h_pct:+.2f}% 24h</span>
+                            <span class="{d1b_class}" style="font-size: 0.82rem;">({bar_delta_pct:+.2f}% bar)</span>
+                            <span style="color: #64748b; font-size: 0.80rem;">{market_status['wrapper_advice']}</span>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+                with h_col2:
+                    st.caption(f"🕐 Toronto: **{market_status.get('toronto_time', '')[:16]}**")
+                    if market_status.get("order_warning"):
+                        st.caption(f"<span style='color: #fbbf24; font-size: 0.76rem;'>{market_status['order_warning']}</span>", unsafe_allow_html=True)
+
+                # ── Inline Chart Manipulation Toolbar ──
+                st.markdown("<div style='height: 2px;'></div>", unsafe_allow_html=True)
+                tb1, tb2, tb3, tb4, tb5, tb6, tb7 = st.columns([0.6, 0.6, 1.8, 0.6, 1.5, 1.3, 1.6])
+
+                with tb1:
+                    if st.button("➕", help="Zoom In (narrows bar window by 35%)", use_container_width=True):
+                        st.session_state["chart_visible_bars"] = max(15, int(st.session_state["chart_visible_bars"] * 0.65))
                         st.rerun()
-                    else:
-                        st.error("Invalid username or password.")
 
-        with auth_tab2:
-            st.markdown("##### Register new trading account")
-            reg_user = st.text_input("Choose Username", key="reg_username_input").strip()
-            reg_pwd = st.text_input("Choose Password", type="password", key="reg_pwd_input").strip()
-            reg_cap = st.number_input("Starting Capital ($ CAD)", min_value=100.0, max_value=10_000_000.0, value=25_000.0, step=1000.0)
-            if st.button("✨ Register & Initialize Account", key="reg_submit_btn", type="primary", use_container_width=True):
-                if len(reg_user) < 3:
-                    st.error("Username must be at least 3 characters.")
-                elif len(reg_pwd) < 6:
-                    st.error("Password must be at least 6 characters.")
-                else:
-                    success, msg, user_id = auth.register_user(reg_user, reg_pwd, starting_capital=reg_cap)
-                    if success:
-                        user = auth.authenticate_user(reg_user, reg_pwd)
-                        st.query_params["session"] = user["session_token"]
-                        st.session_state.user = user
-                        st.toast(f"Account created successfully for {reg_user}!", icon="🎉")
-                        time.sleep(0.4)
+                with tb2:
+                    if st.button("➖", help="Zoom Out (widens bar window by 50%)", use_container_width=True):
+                        st.session_state["chart_visible_bars"] = min(len(df_bars), int(st.session_state["chart_visible_bars"] * 1.50))
                         st.rerun()
-                    else:
-                        st.error(f"Registration error: {msg}")
 
+                with tb3:
+                    win_opts = ["30B", "60B", "120B", "All"]
+                    curr_bars = st.session_state["chart_visible_bars"]
+                    def_win_idx = 0 if curr_bars <= 35 else (1 if curr_bars <= 70 else (2 if curr_bars <= 130 else 3))
+                    sel_win = st.segmented_control("Bars", options=win_opts, default=win_opts[def_win_idx], label_visibility="collapsed", key="win_pills")
+                    if sel_win:
+                        target_map = {"30B": 30, "60B": 60, "120B": 120, "All": len(df_bars)}
+                        if target_map[sel_win] != st.session_state["chart_visible_bars"]:
+                            st.session_state["chart_visible_bars"] = target_map[sel_win]
+                            st.rerun()
 
-# ---------------------------------------------------------------------------
-#  Sidebar Controls
-# ---------------------------------------------------------------------------
-def _render_sidebar() -> None:
-    with st.sidebar:
-        st.markdown("## ⚡ TRADESENSE")
-        st.caption("Institutional Live Quant Cockpit")
-        st.divider()
+                with tb4:
+                    if st.button("↺", help="Reset zoom to 80 bars", use_container_width=True):
+                        st.session_state["chart_visible_bars"] = 80
+                        st.rerun()
 
-        # User Profile & Persistent Cash Header
-        user = st.session_state.get("user")
-        if user:
-            cur_cash = st.session_state.gauntlet.cash if "gauntlet" in st.session_state else user.get("cash_balance", 25000.0)
-            st.markdown(
-                f"""
-                <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 10px; padding: 10px 14px; margin-bottom: 12px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <span style="font-weight: 700; color: #10b981; font-size: 0.95rem;">👤 {user['username']}</span>
-                        <span style="font-size: 0.75rem; color: #94a3b8;">ID #{user['id']}</span>
-                    </div>
-                    <div style="margin-top: 4px; font-family: 'JetBrains Mono', monospace; font-size: 1.15rem; font-weight: 700; color: #f1f5f9;">
-                        ${cur_cash:,.2f} <small style="font-size: 0.75rem; color: #94a3b8;">CAD</small>
-                    </div>
-                    <div style="font-size: 0.72rem; color: #64748b; margin-top: 2px;">
-                        Persistent SQLite • F5 Protected
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            col_reset, col_logout = st.columns(2)
-            with col_reset:
-                if st.button("🔄 Reset Cash", use_container_width=True, help="Reset cash balance in SQLite back to starting capital"):
-                    st.session_state.gauntlet.reset()
-                    st.toast("Portfolio cash reset to starting capital in database!", icon="💰")
-                    st.rerun()
-            with col_logout:
-                if st.button("🚪 Logout", use_container_width=True):
-                    auth = AuthManager()
-                    token = st.query_params.get("session")
-                    if token:
-                        auth.logout_user(token)
-                    st.query_params.clear()
-                    st.session_state.clear()
-                    st.rerun()
-            st.divider()
+                with tb5:
+                    hor_opts = ["3B", "5B", "10B", "20B"]
+                    cur_h_idx = [3, 5, 10, 20].index(horizon_bars) if horizon_bars in [3, 5, 10, 20] else 1
+                    sel_h = st.segmented_control("Horizon", options=hor_opts, default=hor_opts[cur_h_idx], label_visibility="collapsed", key="hor_pills")
+                    if sel_h:
+                        num_h = int(sel_h.replace("B", ""))
+                        if num_h != st.session_state["horizon_bars"]:
+                            st.session_state["horizon_bars"] = num_h
+                            active_profile.horizon_bars = num_h
+                            profile_mgr.save_profile(active_profile)
+                            st.rerun()
 
-        # Watchlist & Asset Selection
-        st.markdown("**📋 Asset Selection**")
-        wm: WatchlistManager = st.session_state.watchlist
-        category = st.selectbox(
-            "Category",
-            [c.value for c in AssetCategory],
-            format_func=lambda x: x.replace("_", " ").title(),
-            index=3,  # Default to Crypto
-        )
-        tickers = wm.get_tickers(AssetCategory(category))
-        ticker_choice = st.selectbox("Symbol", tickers, index=tickers.index("BTC-CAD") if "BTC-CAD" in tickers else 0)
+                with tb6:
+                    style_opts = ["Candles", "Heikin-Ashi", "Line"]
+                    sel_style = st.selectbox("Style", options=style_opts, index=style_opts.index(st.session_state["chart_type"]), label_visibility="collapsed", key="chart_style_sel")
+                    if sel_style != st.session_state["chart_type"]:
+                        st.session_state["chart_type"] = sel_style
+                        st.rerun()
 
-        custom = st.text_input("Or Custom Symbol", value="").upper().strip()
-        new_ticker = custom if custom else ticker_choice
+                with tb7:
+                    with st.popover("📈 Overlays", use_container_width=True):
+                        avail_ov = ["EMA 9 & 21", "VWAP", "Bollinger Bands", "Support / Resistance", "Volume Bars", "Price Lines"]
+                        new_ov = st.multiselect("Active Overlays", options=avail_ov, default=st.session_state["chart_overlays"], key="multisel_overlays")
+                        if new_ov != st.session_state["chart_overlays"]:
+                            st.session_state["chart_overlays"] = new_ov
+                            st.rerun()
 
-        if new_ticker != st.session_state.ticker:
-            st.session_state.ticker = new_ticker
-            _reload_active_asset()
-            st.rerun()
+                # Interactive Plotly Chart
+                order_price_lines = {
+                    "limit_entry": current_price,
+                    "take_profit": consensus_p90,
+                    "stop_loss": consensus_p10,
+                } if "Price Lines" in st.session_state["chart_overlays"] else None
 
-        st.divider()
-
-        # Stream Feed Settings
-        st.markdown("**🛰️ Live Stream Dynamics**")
-        stream_mode_name = st.radio(
-            "Stream Engine",
-            [
-                "Microstructure Simulation (Whale Flow)",
-                "Historical Market Replay",
-            ],
-            index=0 if st.session_state.stream_mode == StreamMode.SYNTHETIC_MICROSTRUCTURE else 1,
-        )
-        new_mode = (
-            StreamMode.SYNTHETIC_MICROSTRUCTURE
-            if "Microstructure" in stream_mode_name
-            else StreamMode.HISTORICAL_REPLAY
-        )
-        if new_mode != st.session_state.stream_mode:
-            st.session_state.stream_mode = new_mode
-            st.session_state.feed.mode = new_mode
-
-        live_toggle = st.toggle("🔴 Real-Time Auto-Stream", value=st.session_state.live_streaming)
-        st.session_state.live_streaming = live_toggle
-
-        st.divider()
-
-        # Execution Engine Parameters
-        st.markdown("**🛡️ Institutional Risk Controls**")
-        risk_pct = st.slider("Risk Per Trade (%)", 0.5, 5.0, 2.0, 0.5) / 100.0
-        conf_thresh = st.slider("Min Strategy Confidence", 50, 90, 70, 5) / 100.0
-        trailing_stop_pct = st.slider("Dynamic Trailing Stop (%)", 0.5, 5.0, 1.5, 0.1) / 100.0
-
-        if "bot" in st.session_state:
-            st.session_state.bot.config.risk_per_trade = risk_pct
-            st.session_state.bot.config.min_confidence = conf_thresh
-            st.session_state.bot.config.trailing_stop_pct = trailing_stop_pct
-
-        st.divider()
-
-        # System Health Telemetry
-        st.markdown("**💻 System Status**")
-        try:
-            summary = HealthCheck.summary_emoji()
-            st.caption(summary)
-        except Exception:
-            st.caption("GPU 🟢 Net 🟢 Models 🟢")
-
-        # Action Buttons
-        if st.button("🔄 Sync Market Data", use_container_width=True):
-            _fetch_active_data()
-            st.rerun()
-
-
-def _reload_active_asset() -> None:
-    """Fetch new asset and update live feed and bot."""
-    _fetch_active_data()
-    st.session_state.feed = LiveMarketFeed(
-        ticker=st.session_state.ticker,
-        mode=st.session_state.stream_mode,
-        base_df=st.session_state.raw_df,
-    )
-    st.session_state.bot = AutonomousSniperBot(
-        feed=st.session_state.feed,
-        strategy=EnsembleAlpha(),
-        config=BotConfig(symbol=st.session_state.ticker, initial_balance=st.session_state.gauntlet.starting_capital),
-        persist_portfolio=False,
-        ai_engine=st.session_state.engine,
-    )
-
-
-def _fetch_active_data() -> None:
-    lake: DataLake = st.session_state.lake
-    ticker = st.session_state.ticker
-    with st.spinner(f"Ingesting {ticker} order-flow & sentiment…"):
-        try:
-            raw = lake.fetch(ticker, timeframe=st.session_state.timeframe, lookback="6mo")
-            feat = lake.engineer_features(raw, ticker=ticker, include_sentiment=False)
-            feat.ffill(inplace=True)
-            feat.bfill(inplace=True)
-            feat.dropna(inplace=True)
-            st.session_state.raw_df = raw
-            st.session_state.feat_df = feat
-            st.toast(f"✅ Loaded {len(raw)} bars for {ticker}", icon="📊")
-        except Exception as e:
-            logger.error("Fetch error for %s: %s", ticker, e)
-            _load_default_asset()
-            st.toast(f"Synthesizing active stream for {ticker}", icon="⚡")
-
-
-# ---------------------------------------------------------------------------
-#  Top Ticker Ribbon & Telemetry
-# ---------------------------------------------------------------------------
-def _render_top_ribbon(tick: MarketTick, metrics: Dict[str, Any]) -> None:
-    bot: AutonomousSniperBot = st.session_state.bot
-    bot_armed = bot.state == BotState.ARMED
-
-    col_info, col_m1, col_m2, col_m3, col_m4, col_bot = st.columns([2.5, 2, 2, 2, 2, 2])
-
-    with col_info:
-        st.markdown(
-            f"""
-            <div style="padding-top: 4px;">
-                <span class="pulse-live"></span>&nbsp;
-                <strong style="font-size: 1.25rem; font-family: 'JetBrains Mono', monospace;">{tick.ticker}</strong>
-                <span style="font-size: 1.25rem; font-weight: 700; margin-left: 8px;">${tick.price:,.2f}</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        regime_str = metrics.get("Regime", bot.current_regime)
-        if regime_str == "BULL_TREND":
-            badge_html = '<span class="bull-badge">🟢 BULL TREND</span>'
-        elif regime_str == "BEAR_TREND":
-            badge_html = '<span class="cash-badge">🔴 BEAR TREND (CASH LOCK)</span>'
-        elif regime_str == "RANGING_CHOP":
-            badge_html = '<span class="chop-badge">🟡 RANGING CHOP</span>'
-        else:
-            badge_html = f'<span class="whale-badge">⚡ {regime_str}</span>'
-
-        if tick.is_whale:
-            st.markdown(f'{badge_html}&nbsp;<span class="whale-badge">🐋 WHALE (Z={tick.whale_z:.1f})</span>', unsafe_allow_html=True)
-        else:
-            st.markdown(f'{badge_html}&nbsp;<span style="font-size: 0.75rem; color: #94a3b8;">Spread: ${tick.spread:.2f}</span>', unsafe_allow_html=True)
-
-    with col_m1:
-        st.metric("Portfolio Value", f"${metrics['Portfolio Value']:,.2f}", f"{metrics['Total Return %']:+0.2f}%")
-
-    with col_m2:
-        st.metric("Available Cash", f"${metrics['Cash Balance']:,.2f}", f"{metrics['Open Positions']} Open")
-
-    with col_m3:
-        st.metric("Win Rate", f"{metrics['Win Rate %']:.1f}%", f"{metrics['Total Trades']} Trades")
-
-    with col_m4:
-        st.metric("Profit Factor", f"{metrics['Profit Factor']:.2f}", f"Sharpe: {metrics['Sharpe Ratio']:.2f}")
-
-    with col_bot:
-        if bot_armed:
-            status = bot.get_session_status()
-            if status["is_timed"]:
-                st.markdown(
-                    f'<p style="color: #10b981; font-weight: 700; margin-bottom: 2px;"><span class="pulse-armed"></span> 🤖 ARMED ({status["remaining_formatted"]} left)</p>',
-                    unsafe_allow_html=True,
+                chart_fig = build_interactive_chart(
+                    df=df_bars,
+                    symbol=active_asset.ws_display_symbol,
+                    forecast=quant_zoo_results,
+                    visible_bars=st.session_state["chart_visible_bars"],
+                    chart_type=st.session_state["chart_type"],
+                    overlays=st.session_state["chart_overlays"],
+                    trades_history=efficiency_summary.trades_history,
+                    order_levels=order_price_lines,
                 )
-                st.progress(min(1.0, max(0.0, status["progress_pct"] / 100.0)))
-            else:
-                st.markdown(
-                    '<p style="color: #10b981; font-weight: 700; margin-bottom: 2px;"><span class="pulse-armed"></span> 🤖 BOT ARMED</p>',
-                    unsafe_allow_html=True,
-                )
-            if st.button("🛑 DISARM BOT", key="disarm_btn", use_container_width=True):
-                bot.disarm(reason="MANUAL_STOP")
-                st.rerun()
-        else:
-            st.markdown('<p style="color: #94a3b8; font-weight: 600; margin-bottom: 2px;">⚪ BOT STANDBY</p>', unsafe_allow_html=True)
-            timeslot_choice = st.selectbox(
-                "Timed Slot",
-                ["15 mins", "20 mins", "30 mins", "60 mins", "5 mins", "Continuous"],
-                index=0,
-                key="timeslot_select",
-                label_visibility="collapsed",
-            )
-            dur_mins = float(timeslot_choice.replace("mins", "").strip()) if "mins" in timeslot_choice else None
-            btn_label = f"🚀 ARM ({timeslot_choice})" if dur_mins else "🚀 ARM (Continuous)"
-            if st.button(btn_label, key="arm_btn", use_container_width=True):
-                bot.arm(duration_minutes=dur_mins)
-                st.rerun()
+                st.plotly_chart(chart_fig, use_container_width=True, config=PLOTLY_GLASS_CONFIG)
 
+                # ── 8-Model ML/DL Quant Zoo Strip & Preset Selector ──
+                st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
+                m_bar1, m_bar2 = st.columns([5.5, 4.5])
+                with m_bar1:
+                    st.markdown("<div style='font-size: 0.78rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;'>Quant Zoo Ensemble Preset</div>", unsafe_allow_html=True)
+                    preset_labels = {
+                        "AUTO_DNA": "🧬 Auto-DNA",
+                        "PURE_DL": "🧠 Pure DL",
+                        "TREE_ML": "🌲 Tree ML",
+                        "FULL_SUPER": "⚡ All 8 Models",
+                        "CUSTOM": "🎛️ Custom",
+                    }
+                    preset_keys = list(preset_labels.keys())
+                    cur_preset_idx = preset_keys.index(st.session_state["model_preset"]) if st.session_state["model_preset"] in preset_keys else 0
+                    sel_preset = st.segmented_control("Preset", options=preset_keys, default=preset_keys[cur_preset_idx], format_func=lambda x: preset_labels[x], label_visibility="collapsed", key="preset_segmented")
+                    if sel_preset and sel_preset != st.session_state["model_preset"]:
+                        st.session_state["model_preset"] = sel_preset
+                        active_profile.model_preset = sel_preset
+                        profile_mgr.save_profile(active_profile)
+                        st.rerun()
 
-# ---------------------------------------------------------------------------
-#  Fragment: Real-Time Live Streaming Chart & Execution Cockpit
-# ---------------------------------------------------------------------------
-def _format_chart_time_labels(index: pd.Index) -> List[str]:
-    """
-    Format candlestick x-axis labels with guaranteed category uniqueness.
-    Prevents Plotly from collapsing bars sharing identical string labels into single monolith bins.
-    """
-    if len(index) == 0:
-        return []
-
-    is_daily = False
-    try:
-        is_daily = all(
-            hasattr(ts, "hour") and ts.hour == 0 and ts.minute == 0 and ts.second == 0
-            for ts in index
-        )
-    except Exception:
-        pass
-
-    labels = []
-    seen: Dict[str, int] = {}
-    for ts in index:
-        if not hasattr(ts, "strftime"):
-            lbl = str(ts)
-        elif is_daily:
-            lbl = ts.strftime("%b %d")
-        else:
-            lbl = ts.strftime("%H:%M:%S")
-
-        if lbl in seen:
-            seen[lbl] += 1
-            lbl = f"{lbl} #{seen[lbl]}"
-        else:
-            seen[lbl] = 1
-        labels.append(lbl)
-    return labels
-
-
-def _render_wealthsimple_interactive_card(user_id: int, cur_p: float, ticker: str, pred: Optional[QuantilePrediction], bot: Any) -> None:
-    """Render animated interactive Wealthsimple signal card or exit closing alert."""
-    copier: WealthsimpleCopier = st.session_state.copier
-
-    # 1. Exit Trigger Check on Active WS Trades
-    exit_triggers = copier.evaluate_active_trades(user_id=user_id, current_prices={ticker: cur_p})
-    if exit_triggers:
-        ex = exit_triggers[0]
-        st.markdown(
-            f"""
-            <div class="ws-floating-card ws-exit-card">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                    <span style="font-weight: 800; font-size: 0.95rem; color: #ef4444;">🚨 WEALTHSIMPLE EXIT ALERT</span>
-                    <span style="font-size: 0.75rem; background: rgba(239,68,68,0.25); color: #f87171; border: 1px solid #ef4444; border-radius: 10px; padding: 2px 8px;">
-                        #{ex['tx_id']}
-                    </span>
-                </div>
-                <div style="font-size: 1.1rem; font-weight: 800; color: #f87171;">
-                    SELL & CLOSE {ex['ws_symbol']}
-                </div>
-                <div style="margin-top: 6px; font-size: 0.82rem; color: #cbd5e1; line-height: 1.5;">
-                    <div>• <b>Trigger Reason:</b> <span style="color: #fbbf24;">{ex['reason']}</span></div>
-                    <div>• <b>Original Entry:</b> ${ex['actual_entry']:,.2f} CAD</div>
-                    <div>• <b>Current Market:</b> ${cur_p:,.2f} CAD</div>
-                    <div>• <b>Projected Return:</b> <span style="color: {'#10b981' if ex['projected_pnl_cad'] >= 0 else '#ef4444'}; font-weight: 700;">${ex['projected_pnl_cad']:+0.2f} CAD ({ex['projected_pnl_pct']:+0.2f}%)</span></div>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        col_ex_p, col_ex_btn = st.columns([1.5, 2])
-        with col_ex_p:
-            exit_fill = st.number_input("Actual Exit Price ($ CAD)", value=float(cur_p), key=f"ex_fill_{ex['tx_id']}")
-        with col_ex_btn:
-            st.write("")
-            st.write("")
-            if st.button("✅ I Closed on Wealthsimple", key=f"btn_close_{ex['tx_id']}", type="primary", use_container_width=True):
-                pnl_cad = (exit_fill - ex['actual_entry']) * ex['quantity'] if ex['side'] == "BUY" else (ex['actual_entry'] - exit_fill) * ex['quantity']
-                pnl_pct = ((exit_fill - ex['actual_entry']) / ex['actual_entry']) * 100.0 if ex['actual_entry'] > 0 else 0.0
-                copier.confirm_closing(
-                    tx_id=ex['tx_id'],
-                    actual_exit_price=exit_fill,
-                    realized_pnl_cad=pnl_cad,
-                    realized_pnl_pct=pnl_pct,
-                    closing_reason=ex['reason'],
-                )
-                st.toast(f"🎉 Trade #{ex['tx_id']} closed! Realized P&L: ${pnl_cad:+0.2f} CAD", icon="💰")
-                time.sleep(0.4)
-                st.rerun()
-        return
-
-    # 2. Check if user already holds an open WS position in this ticker
-    active_ws = copier.get_active_trades(user_id=user_id)
-    held_ws = next((t for t in active_ws if t["ticker"] == ticker), None)
-    if held_ws:
-        unrealized_cad = (cur_p - held_ws["actual_entry"]) * held_ws["quantity"] if held_ws["side"] == "BUY" else (held_ws["actual_entry"] - cur_p) * held_ws["quantity"]
-        unrealized_pct = ((cur_p - held_ws["actual_entry"]) / held_ws["actual_entry"]) * 100.0 if held_ws["actual_entry"] > 0 else 0.0
-        pnl_col = "#10b981" if unrealized_cad >= 0 else "#ef4444"
-        st.markdown(
-            f"""
-            <div style="background: linear-gradient(135deg, rgba(15, 23, 42, 0.9) 0%, rgba(30, 41, 59, 0.9) 100%);
-                        border: 1px solid rgba(59, 130, 246, 0.4); border-radius: 10px; padding: 12px; margin-bottom: 12px;">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span style="font-weight: 700; font-size: 0.9rem; color: #38bdf8;">📱 ACTIVE WS TRADE: #{held_ws['tx_id']}</span>
-                    <span style="font-size: 0.75rem; color: #94a3b8;">{held_ws['ws_symbol']}</span>
-                </div>
-                <div style="margin-top: 6px; font-size: 0.85rem; line-height: 1.55;">
-                    <div>• <b>Entry:</b> ${held_ws['actual_entry']:,.2f} CAD ({held_ws['quantity']:.4f} units)</div>
-                    <div>• <b>Target:</b> <span style="color: #10b981;">${held_ws.get('target_price', 0):,.2f}</span> | <b>Stop:</b> <span style="color: #ef4444;">${held_ws.get('stop_price', 0):,.2f}</span></div>
-                    <div>• <b>Live P&L:</b> <span style="color: {pnl_col}; font-weight: 700;">${unrealized_cad:+0.2f} CAD ({unrealized_pct:+0.2f}%)</span></div>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        c_m1, c_m2 = st.columns(2)
-        with c_m1:
-            if st.button(f"🚨 Manual Exit #{held_ws['tx_id']}", key=f"man_exit_{held_ws['tx_id']}", use_container_width=True):
-                copier.confirm_closing(
-                    tx_id=held_ws['tx_id'],
-                    actual_exit_price=cur_p,
-                    realized_pnl_cad=unrealized_cad,
-                    realized_pnl_pct=unrealized_pct,
-                    closing_reason="Manual Discretionary Exit",
-                )
-                st.toast(f"Trade #{held_ws['tx_id']} manually closed at ${cur_p:,.2f} CAD", icon="ℹ️")
-                time.sleep(0.4)
-                st.rerun()
-        with c_m2:
-            if st.button(f"🎯 Test Target Exit #{held_ws['tx_id']}", key=f"sim_exit_{held_ws['tx_id']}", use_container_width=True):
-                target_p = held_ws.get("target_price", cur_p * 1.03)
-                pnl_win = (target_p - held_ws["actual_entry"]) * held_ws["quantity"]
-                pnl_pct_win = ((target_p - held_ws["actual_entry"]) / held_ws["actual_entry"]) * 100.0
-                copier.confirm_closing(
-                    tx_id=held_ws['tx_id'],
-                    actual_exit_price=target_p,
-                    realized_pnl_cad=pnl_win,
-                    realized_pnl_pct=pnl_pct_win,
-                    closing_reason="🎯 Take-Profit Target Hit ($0 Comm)",
-                )
-                st.toast(f"🎉 Trade #{held_ws['tx_id']} closed! Profit: ${pnl_win:+,.2f} CAD", icon="💰")
-                time.sleep(0.4)
-                st.rerun()
-        return
-
-    # 3. Check for New High-Conviction Signal
-    candidate = copier.evaluate_signal(prediction=pred, current_price=cur_p, ticker=ticker)
-    force_key = f"force_ws_sig_{ticker}"
-    if not candidate and st.session_state.get(force_key, False):
-        from src.models.wealthsimple_copier import WealthsimpleCandidate
-        proxy_info = CanadianAssetProxy.get_proxy(ticker)
-        candidate = WealthsimpleCandidate(
-            ticker=ticker,
-            ws_symbol=proxy_info["ws_symbol"],
-            side="BUY",
-            entry_price=round(cur_p, 2),
-            target_price=round(cur_p * 1.028, 2),
-            stop_price=round(cur_p * 0.986, 2),
-            confidence=0.88,
-            expected_return_pct=2.80,
-            rrr=2.0,
-            reason="High-Conviction Whale Volume & Quantile Surge",
-        )
-
-    dismiss_key = f"ws_dismissed_{ticker}"
-    if candidate and not st.session_state.get(dismiss_key, False):
-        st.markdown(
-            f"""
-            <div class="ws-floating-card">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                    <span style="font-weight: 800; font-size: 0.95rem; color: #10b981;">⚡ WEALTHSIMPLE TRADE SIGNAL</span>
-                    <span style="font-size: 0.75rem; background: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid #10b981; border-radius: 10px; padding: 2px 8px;">
-                        {candidate.confidence:.0%} Conviction
-                    </span>
-                </div>
-                <div style="display: flex; justify-content: space-between; align-items: baseline;">
-                    <span style="font-size: 1.15rem; font-weight: 800; color: #38bdf8;">{candidate.side} {candidate.ws_symbol}</span>
-                    <span style="color: #94a3b8; font-size: 0.78rem;">TSX ETF ($0-comm)</span>
-                </div>
-                <div style="margin-top: 6px; font-size: 0.82rem; color: #cbd5e1; line-height: 1.55;">
-                    <div>• <b>Suggested Entry:</b> <span style="color: #38bdf8;">${candidate.entry_price:,.2f} CAD</span></div>
-                    <div>• <b>Take Profit:</b> <span style="color: #10b981;">${candidate.target_price:,.2f} CAD (+{candidate.expected_return_pct:.2f}%)</span></div>
-                    <div>• <b>Stop Loss:</b> <span style="color: #ef4444;">${candidate.stop_price:,.2f} CAD</span></div>
-                    <div>• <b>RRR:</b> <b>{candidate.rrr:.2f}x</b> | Spread Hurdle (&gt;1.5%) Verified ✅</div>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        col_c_cap, col_c_fill = st.columns(2)
-        with col_c_cap:
-            commit_cad = st.number_input("Commit ($ CAD)", min_value=25.0, max_value=50000.0, value=500.0, step=50.0, key=f"ws_cap_in_{ticker}")
-        with col_c_fill:
-            fill_cad = st.number_input("Fill Price ($ CAD)", value=float(cur_p), key=f"ws_fill_in_{ticker}")
-
-        col_exec, col_dism = st.columns([2.5, 1])
-        with col_exec:
-            if st.button("✅ I Executed on Wealthsimple", key=f"btn_exec_{ticker}", type="primary", use_container_width=True):
-                st.session_state.pop(force_key, None)
-                qty = commit_cad / fill_cad if fill_cad > 0 else 0.0
-                tx_id = copier.confirm_execution(
-                    user_id=user_id,
-                    signal=candidate,
-                    actual_entry_price=fill_cad,
-                    capital_cad=commit_cad,
-                    quantity=qty,
-                )
-                st.toast(f"✅ Trade logged as #{tx_id}! Monitoring exit...", icon="🚀")
-                time.sleep(0.4)
-                st.rerun()
-        with col_dism:
-            if st.button("✖ Dismiss", key=f"btn_dism_{ticker}", use_container_width=True):
-                st.session_state.pop(force_key, None)
-                st.session_state[dismiss_key] = True
-                st.rerun()
-    else:
-        proxy_info = CanadianAssetProxy.get_proxy(ticker)
-        ws_symbol = proxy_info["ws_symbol"]
-        ws_name = proxy_info["description"]
-        st.markdown(
-            f"""
-            <div style="background: rgba(15, 23, 42, 0.65); border: 1px dashed rgba(59, 130, 246, 0.3); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px;">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span style="font-weight: 700; font-size: 0.85rem; color: #94a3b8;">📲 WEALTHSIMPLE COPIER</span>
-                    <span class="bull-badge" style="font-size: 0.7rem;">Standing By</span>
-                </div>
-                <div style="margin-top: 6px; font-size: 0.78rem; color: #64748b;">
-                    Canadian Proxy: <b>{ws_symbol}</b> ({ws_name}) • $0 comm on Wealthsimple. Standing by for &ge;70% confidence + 1.5% hurdle signal.
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        if st.button("🔔 Trigger Test Signal Alert", key=f"btn_force_ws_sig_{ticker}", use_container_width=True):
-            st.session_state[force_key] = True
-            st.rerun()
-
-
-@st.fragment(run_every="2s")
-def _render_live_streaming_fragment() -> None:
-    """
-    Native Streamlit Fragment running every 2 seconds.
-    Advances market tick, evaluates open positions, updates trailing stops,
-    generates signals, and redraws live interactive charts without full-page rerun!
-    """
-    bot: AutonomousSniperBot = st.session_state.bot
-    feed: LiveMarketFeed = st.session_state.feed
-    pred: Optional[QuantilePrediction] = st.session_state.prediction
-
-    # 1. Advance tick if live streaming is active
-    if st.session_state.live_streaming:
-        tick = bot.step(prediction=pred)
-    else:
-        # Static tick snapshot
-        tick = MarketTick(
-            ticker=feed.ticker,
-            price=feed.current_price,
-            bid=feed.current_price * 0.9998,
-            ask=feed.current_price * 1.0002,
-            volume=1500.0,
-        )
-
-    # 2. Render Top Ticker Ribbon
-    metrics = bot.get_metrics()
-    _render_top_ribbon(tick, metrics)
-
-    # Circuit Breaker Alert Banner if active
-    if bot._circuit_breaker_ticks > 0:
-        st.warning(
-            f"🛑 **Circuit Breaker Active**: Execution frozen for {bot._circuit_breaker_ticks} ticks "
-            f"(~{bot._circuit_breaker_ticks * 2}s) after 2 consecutive stop-outs to preserve capital."
-        )
-
-    st.markdown("<hr style='margin: 8px 0; opacity: 0.15;'/>", unsafe_allow_html=True)
-
-    # 3. Main Chart & Execution Columns
-    chart_col, control_col = st.columns([2.5, 1])
-
-    with chart_col:
-        streaming_df = feed.streaming_df
-        if streaming_df.empty:
-            st.info("Market stream initializing…")
-            return
-
-        display_df = streaming_df.tail(60).copy()
-        time_labels = _format_chart_time_labels(display_df.index)
-
-        fig = make_subplots(
-            rows=2,
-            cols=1,
-            shared_xaxes=True,
-            row_heights=[0.78, 0.22],
-            vertical_spacing=0.03,
-        )
-
-        # Candlestick with category x-axis to eliminate ugly time gaps
-        fig.add_trace(
-            go.Candlestick(
-                x=time_labels,
-                open=display_df["Open"],
-                high=display_df["High"],
-                low=display_df["Low"],
-                close=display_df["Close"],
-                name="Price",
-                increasing_line_color="#00E676",
-                increasing_fillcolor="#00E676",
-                decreasing_line_color="#FF1744",
-                decreasing_fillcolor="#FF1744",
-            ),
-            row=1,
-            col=1,
-        )
-
-        # Smooth Technical EMAs
-        if "EMA_9" in display_df.columns:
-            fig.add_trace(
-                go.Scatter(
-                    x=time_labels,
-                    y=display_df["EMA_9"],
-                    name="EMA 9",
-                    line=dict(color="#fbbf24", width=1.2),
-                ),
-                row=1,
-                col=1,
-            )
-        if "EMA_20" in display_df.columns:
-            fig.add_trace(
-                go.Scatter(
-                    x=time_labels,
-                    y=display_df["EMA_20"],
-                    name="EMA 20",
-                    line=dict(color="#38bdf8", width=1.5, dash="dot"),
-                ),
-                row=1,
-                col=1,
-            )
-
-        # Bollinger Bands Cloud
-        if "BB_Upper" in display_df.columns and "BB_Lower" in display_df.columns:
-            fig.add_trace(
-                go.Scatter(
-                    x=time_labels,
-                    y=display_df["BB_Upper"],
-                    name="BB Upper",
-                    line=dict(color="rgba(148, 163, 184, 0.3)", width=1),
-                    showlegend=False,
-                ),
-                row=1,
-                col=1,
-            )
-            fig.add_trace(
-                go.Scatter(
-                    x=time_labels,
-                    y=display_df["BB_Lower"],
-                    name="BB Bands",
-                    fill="tonexty",
-                    fillcolor="rgba(56, 189, 248, 0.05)",
-                    line=dict(color="rgba(148, 163, 184, 0.3)", width=1),
-                ),
-                row=1,
-                col=1,
-            )
-
-        # Active Entry Price Line
-        if feed.ticker in bot.gauntlet.positions:
-            pos = bot.gauntlet.positions[feed.ticker]
-            fig.add_hline(
-                y=pos.avg_cost,
-                line_dash="dot",
-                line_color="#c084fc",
-                line_width=1.5,
-                annotation_text=f"Position Entry: ${pos.avg_cost:,.2f}",
-                annotation_position="top left",
-                row=1,
-                col=1,
-            )
-
-        # Active Trailing Stop Floor
-        if bot.config.symbol in bot.gauntlet._trailing_stops:
-            ts_price = bot.gauntlet._trailing_stops[bot.config.symbol]["stop_price"]
-            fig.add_hline(
-                y=ts_price,
-                line_dash="solid",
-                line_color="#f59e0b",
-                line_width=2,
-                annotation_text=f"🛡️ Trailing Floor: ${ts_price:,.2f}",
-                annotation_position="bottom left",
-                row=1,
-                col=1,
-            )
-
-        # Current Price Horizontal Tracker
-        fig.add_hline(
-            y=tick.price,
-            line_dash="dash",
-            line_color="#38bdf8",
-            line_width=1,
-            annotation_text=f"Live: ${tick.price:,.2f}",
-            annotation_position="right",
-            row=1,
-            col=1,
-        )
-
-        # Volume Bar Subplot with Whale Alerts
-        vol_colors = [
-            "#f59e0b" if flag == 1 else "rgba(100, 116, 139, 0.4)"
-            for flag in display_df.get("Whale_Flag", [0] * len(display_df))
-        ]
-        fig.add_trace(
-            go.Bar(
-                x=time_labels,
-                y=display_df.get("Volume", [1000] * len(display_df)),
-                name="Volume",
-                marker_color=vol_colors,
-            ),
-            row=2,
-            col=1,
-        )
-
-        fig.update_xaxes(type="category", row=1, col=1)
-        fig.update_xaxes(type="category", row=2, col=1)
-        fig.update_layout(
-            template="plotly_dark",
-            height=500,
-            margin=dict(l=40, r=60, t=20, b=20),
-            xaxis_rangeslider_visible=False,
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(15, 23, 42, 0.6)",
-            legend=dict(orientation="h", y=1.03, x=0.01),
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    with control_col:
-        st.markdown("#### 🎯 Execution Cockpit")
-        cur_p = tick.price
-        avail_cash = bot.gauntlet.cash
-
-        # Probabilistic Direction card
-        if pred:
-            badge_class = "bull-badge" if pred.direction == "BULLISH" else "bear-badge"
-            st.markdown(
-                f"""
-                <div style="background: rgba(15, 23, 42, 0.65); padding: 12px; border-radius: 8px; border: 1px solid rgba(59, 130, 246, 0.2); margin-bottom: 12px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <span class="{badge_class}">{pred.direction}</span>
-                        <strong style="font-size: 1.1rem; color: #38bdf8;">{pred.confidence:.1%} Conf</strong>
-                    </div>
-                    <div style="margin-top: 8px; font-size: 0.85rem; color: #94a3b8;">
-                        Target: <strong style="color: #10b981;">${pred.p90:,.2f}</strong> | Floor: <strong style="color: #ef4444;">${pred.p10:,.2f}</strong>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        # 📲 Wealthsimple Mobile Trade Copier (Interactive Animated Pop-Up Card)
-        user_id = st.session_state.user["id"] if "user" in st.session_state and st.session_state.user else 1
-        _render_wealthsimple_interactive_card(user_id=user_id, cur_p=cur_p, ticker=feed.ticker, pred=pred, bot=bot)
-
-        # Smart Order Sizing Mode
-        st.markdown("**⚡ Instant Bracket Order**")
-        size_mode = st.radio("Order Sizing", ["Dollar Amount ($)", "Units / Coins"], horizontal=True, label_visibility="collapsed")
-
-        if size_mode == "Dollar Amount ($)":
-            default_dollars = min(1000.0, avail_cash * 0.25)
-            order_usd = st.number_input("Capital to Commit ($)", min_value=10.0, max_value=float(max(10.0, avail_cash)), value=float(max(10.0, default_dollars)), step=100.0)
-            order_qty = round(order_usd / cur_p, 4 if cur_p >= 1000 else 2)
-        else:
-            default_units = 0.02 if cur_p >= 1000 else 10.0
-            order_qty = st.number_input(
-                f"Units of {feed.ticker}",
-                min_value=0.0001,
-                value=float(default_units),
-                step=0.01 if cur_p >= 1000 else 1.0,
-                format="%.4f" if cur_p >= 1000 else "%.2f",
-            )
-            order_usd = order_qty * cur_p
-
-        # Real-time Order Estimation Badge
-        st.caption(f"Estimated Cost: **${order_usd:,.2f}** ({order_qty} {feed.ticker}) | Cash: **${avail_cash:,.2f}**")
-
-        sl_calc = cur_p * 0.98
-        tp_calc = cur_p * 1.04
-
-        col_b1, col_b2 = st.columns(2)
-        with col_b1:
-            if st.button("🟢 BUY BRACKET", use_container_width=True):
-                if order_usd > avail_cash:
-                    st.error(f"❌ Insufficient cash: Need ${order_usd:,.2f}, but available cash is ${avail_cash:,.2f}. Reduce size.")
-                elif order_qty <= 0:
-                    st.warning("⚠️ Quantity must be greater than 0.")
-                else:
-                    try:
-                        order = TradeOrder(ticker=feed.ticker, side=Side.BUY, quantity=order_qty, price=cur_p)
-                        fill = bot.gauntlet.submit_bracket_order(
-                            order=order,
-                            stop_loss=sl_calc,
-                            take_profit=tp_calc,
-                            trailing_stop_pct=bot.config.trailing_stop_pct,
+                with m_bar2:
+                    if st.session_state["model_preset"] == "CUSTOM":
+                        st.markdown("<div style='font-size: 0.78rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;'>Select Active Models</div>", unsafe_allow_html=True)
+                        all_mid = list(ALL_QUANT_MODELS.keys())
+                        selected_custom = st.multiselect(
+                            "Models",
+                            options=all_mid,
+                            default=st.session_state["selected_models"],
+                            format_func=lambda m: ALL_QUANT_MODELS[m].short_label,
+                            label_visibility="collapsed",
+                            key="custom_models_select",
                         )
-                        bot.log("ORDER_BUY", f"Manual BUY {fill.quantity} {feed.ticker} @ ${fill.fill_price:,.2f}", price=fill.fill_price)
-                        st.toast(f"✅ Filled BUY {fill.quantity} {feed.ticker} @ ${fill.fill_price:,.2f}", icon="🟢")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"❌ Order rejected: {e}")
-
-        with col_b2:
-            if st.button("🔴 CLOSE ALL", use_container_width=True):
-                try:
-                    if feed.ticker in bot.gauntlet.positions:
-                        pos = bot.gauntlet.positions[feed.ticker]
-                        fill = bot.gauntlet.submit_order(
-                            TradeOrder(ticker=feed.ticker, side=Side.SELL, quantity=pos.quantity, price=cur_p, exit_reason="MANUAL")
-                        )
-                        bot.log("MANUAL", f"Closed {fill.quantity} {feed.ticker} @ ${fill.fill_price:,.2f}", price=fill.fill_price)
-                        st.toast(f"✅ Closed {fill.quantity} {feed.ticker}", icon="🔴")
-                        st.rerun()
+                        if selected_custom != st.session_state["selected_models"]:
+                            st.session_state["selected_models"] = selected_custom
+                            active_profile.selected_models = selected_custom
+                            profile_mgr.save_profile(active_profile)
+                            st.rerun()
                     else:
-                        st.info(f"No open positions in {feed.ticker}.")
-                except Exception as e:
-                    st.error(f"❌ Close failed: {e}")
-
-        if not st.session_state.live_streaming:
-            if st.button("⏭ Step 1 Tick (Manual)", use_container_width=True):
-                bot.step(prediction=pred)
-
-        st.caption(f"Ticks Processed: {metrics['Ticks Processed']} | Stream: {feed.mode.value}")
-
-    # 4. Live Microstructure Terminal, Open Positions, and Session Archives
-    if bot.last_completed_session_summary:
-        s = bot.last_completed_session_summary
-        pnl_val = s.get("net_pnl", 0.0)
-        pnl_color = "#10b981" if pnl_val >= 0 else "#ef4444"
-        st.markdown(
-            f"""
-            <div style="background: rgba(15, 23, 42, 0.85); border-left: 4px solid {pnl_color}; border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
-                <div>
-                    <strong>📋 Last Session Completed ({s.get('session_id', '')})</strong>:
-                    Net PnL: <span style="color: {pnl_color}; font-weight: 700;">${pnl_val:,.2f} ({s.get('net_return_pct', 0):+.2f}%)</span> |
-                    Trades: <strong>{s.get('total_trades', 0)}</strong> | Win Rate: <strong>{s.get('win_rate_pct', 0):.1f}%</strong> |
-                    Saved to: <code>{Path(s.get('jsonl_file', '')).name}</code>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    tab_term, tab_pos, tab_hist, tab_ws, tab_sessions = st.tabs(
-        ["📟 Microstructure Execution Log", "📊 Active Positions", "📜 Closed Trades", "📱 Wealthsimple Mobile Trades", "📂 Session Archives & AI Telemetry"]
-    )
-
-    with tab_term:
-        logs = bot.get_recent_logs(20)
-        if logs:
-            log_df = pd.DataFrame(logs)
-            st.dataframe(
-                log_df,
-                use_container_width=True,
-                hide_index=True,
-                height=220,
-            )
-        else:
-            st.caption("No log events yet. Start the stream to watch real-time order flow.")
-
-    with tab_pos:
-        positions = bot.gauntlet.positions
-        if positions:
-            pos_records = []
-            for ticker, p in positions.items():
-                ts_floor = bot.gauntlet._trailing_stops.get(ticker, {}).get("stop_price", 0.0)
-                pos_records.append({
-                    "Symbol": p.ticker,
-                    "Quantity": p.quantity,
-                    "Avg Cost": f"${p.avg_cost:,.2f}",
-                    "Current": f"${p.current_price:,.2f}",
-                    "Market Value": f"${p.market_value:,.2f}",
-                    "Unrealized PnL": f"${p.unrealised_pnl:,.2f}",
-                    "PnL %": f"{p.unrealised_pnl_pct:+.2f}%",
-                    "Trailing Stop": f"${ts_floor:,.2f}" if ts_floor > 0 else "N/A",
-                })
-            st.dataframe(pd.DataFrame(pos_records), use_container_width=True, hide_index=True)
-        else:
-            st.caption("No active open positions. Arm the Sniper Bot or submit an order above.")
-
-    with tab_hist:
-        trades_df = bot.get_trades_df()
-        if not trades_df.empty:
-            st.dataframe(trades_df.tail(20), use_container_width=True, hide_index=True)
-            csv_data = bot.export_trades_csv()
-            st.download_button(
-                label="📥 Download Trades CSV",
-                data=csv_data,
-                file_name=f"tradesense_trades_{feed.ticker}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-        else:
-            st.caption("No completed trades recorded in this session.")
-
-    with tab_ws:
-        u_id = st.session_state.user["id"] if "user" in st.session_state and st.session_state.user else 1
-        ws_copier: WealthsimpleCopier = st.session_state.copier
-        ws_summary = ws_copier.get_user_summary(u_id)
-
-        c_kpi1, c_kpi2, c_kpi3, c_kpi4 = st.columns(4)
-        with c_kpi1:
-            p_val = ws_summary["total_realized_cad"]
-            st.metric("Total Realized P&L", f"${p_val:+,.2f} CAD", delta=f"{p_val:+,.2f}")
-        with c_kpi2:
-            st.metric("Win Rate", f"{ws_summary['win_rate_pct']:.1f}%")
-        with c_kpi3:
-            st.metric("Profit Factor", f"{ws_summary['profit_factor']:.2f}")
-        with c_kpi4:
-            st.metric("Total Trades Copied", f"{ws_summary['total_trades']}")
-
-        st.markdown("##### 🟢 Open Wealthsimple Trades (Actively Monitored)")
-        open_ws = ws_copier.get_active_trades(u_id)
-        if open_ws:
-            open_display = []
-            for t in open_ws:
-                cur_asset_p = tick.price if t["ticker"] == feed.ticker else t["suggested_entry"]
-                u_pnl = (cur_asset_p - t["actual_entry"]) * t["quantity"] if t["side"] == "BUY" else (t["actual_entry"] - cur_asset_p) * t["quantity"]
-                u_pct = ((cur_asset_p - t["actual_entry"]) / t["actual_entry"]) * 100.0 if t["actual_entry"] > 0 else 0.0
-                open_display.append({
-                    "Tx ID": t["tx_id"],
-                    "Symbol": t["ws_symbol"],
-                    "Side": t["side"],
-                    "Units": f"{t['quantity']:.4f}",
-                    "Entry ($ CAD)": f"${t['actual_entry']:,.2f}",
-                    "Current ($ CAD)": f"${cur_asset_p:,.2f}",
-                    "Target ($ CAD)": f"${t.get('target_price', 0):,.2f}",
-                    "Stop ($ CAD)": f"${t.get('stop_price', 0):,.2f}",
-                    "Live P&L": f"${u_pnl:+,.2f} ({u_pct:+.2f}%)",
-                    "Executed At": t.get("executed_time", ""),
-                })
-            st.dataframe(pd.DataFrame(open_display), use_container_width=True, hide_index=True)
-        else:
-            st.caption("No open Wealthsimple trades. Confirm an execution alert above to begin live tracking.")
-
-        st.markdown("##### 📜 Closed Wealthsimple Trades History")
-        closed_ws = ws_copier.get_closed_trades(u_id)
-        if closed_ws:
-            closed_display = []
-            for t in closed_ws:
-                closed_display.append({
-                    "Tx ID": t["tx_id"],
-                    "Symbol": t["ws_symbol"],
-                    "Side": t["side"],
-                    "Entry ($ CAD)": f"${t['actual_entry']:,.2f}",
-                    "Exit ($ CAD)": f"${t['actual_exit']:,.2f}",
-                    "Realized P&L": f"${t['realized_pnl_cad']:+,.2f} CAD",
-                    "Return %": f"{t['realized_pnl_pct']:+.2f}%",
-                    "Reason": t.get("closing_reason", ""),
-                    "Closed At": t.get("exit_time", ""),
-                })
-            st.dataframe(pd.DataFrame(closed_display), use_container_width=True, hide_index=True)
-        else:
-            st.caption("No closed Wealthsimple trades in account history.")
-
-    with tab_sessions:
-        st.markdown("##### 📂 Timed Bot Sessions & AI Deep-Dive Diagnostic Archives")
-        st.caption(
-            "Every timed session records all market ticks, indicator snapshots, AI forecasts, "
-            "sub-strategy voting consensus, order slippage, and portfolio equity to dedicated JSONL files."
-        )
-
-        cur_status = bot.get_session_status()
-        if cur_status["active"]:
-            file_name = Path(cur_status["file_path"]).name if cur_status["file_path"] else "N/A"
-            st.info(
-                f"🔴 **Active Session Running**: `{cur_status['session_id']}` | "
-                f"Remaining: **{cur_status['remaining_formatted']}** | "
-                f"Ticks Logged: **{cur_status['ticks_processed']}** | "
-                f"Active File: `{file_name}`"
-            )
-
-        sessions = SessionLogManager.list_sessions()
-        if sessions:
-            sess_rows = []
-            for s in sessions:
-                sess_rows.append({
-                    "Session ID": s.get("session_id"),
-                    "Symbol": s.get("symbol"),
-                    "Start (UTC)": s.get("start_time", "")[:19].replace("T", " "),
-                    "Duration": f"{s.get('actual_duration_minutes', 0):.1f}m / {s.get('target_duration_minutes', 0):.0f}m",
-                    "Net PnL": f"${s.get('net_pnl', 0):,.2f}",
-                    "Return %": f"{s.get('net_return_pct', 0):+.2f}%",
-                    "Trades": s.get("total_trades", 0),
-                    "Win Rate": f"{s.get('win_rate_pct', 0):.1f}%",
-                    "Max DD": f"{s.get('max_drawdown_pct', 0):.2f}%",
-                    "Exit Reason": s.get("disarm_reason", ""),
-                })
-            st.dataframe(pd.DataFrame(sess_rows), use_container_width=True, hide_index=True)
-
-            selected_sess = st.selectbox(
-                "Select Session for AI Deep-Dive & Diagnostics",
-                [s["session_id"] for s in sessions],
-                index=0,
-                key="select_session_archive",
-            )
-
-            col_rep, col_prompt = st.columns([1.1, 1])
-            with col_rep:
-                st.markdown("**📜 Executive Session Report**")
-                rep_summary = SessionLogManager.load_session_summary(selected_sess)
-                if rep_summary and "report_file" in rep_summary and Path(rep_summary["report_file"]).exists():
-                    with open(rep_summary["report_file"], "r", encoding="utf-8") as rf:
-                        st.markdown(rf.read())
-                else:
-                    st.json(rep_summary or {})
-
-            with col_prompt:
-                st.markdown("**🧠 AI Post-Trade Learning Diagnostic Prompt**")
-                st.caption("Copy this prompt into any AI agent conversation for deep algorithmic trade attribution and strategy improvement:")
-                prompt_text = SessionLogManager.generate_ai_analysis_prompt(selected_sess)
-                st.code(prompt_text, language="markdown")
-
-                # Direct download options
-                if rep_summary:
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        if "jsonl_file" in rep_summary and Path(rep_summary["jsonl_file"]).exists():
-                            with open(rep_summary["jsonl_file"], "r", encoding="utf-8") as jf:
-                                st.download_button(
-                                    "📥 Download JSONL Stream",
-                                    data=jf.read(),
-                                    file_name=Path(rep_summary["jsonl_file"]).name,
-                                    mime="application/x-ndjson",
-                                    use_container_width=True,
-                                )
-                    with c2:
-                        st.download_button(
-                            "📥 Download Summary JSON",
-                            data=json.dumps(rep_summary, indent=2),
-                            file_name=f"{selected_sess}_summary.json",
-                            mime="application/json",
-                            use_container_width=True,
+                        st.markdown(
+                            f"""
+                            <div style="font-size: 0.76rem; color: #64748b; margin-top: 18px;">
+                                Active Blend: <b>{st.session_state['blending_mode']}</b> • Conformal Pad: <b>±{(consensus_p90 - consensus_p50) / current_price * 100:.1f}%</b>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
                         )
-        else:
-            st.caption("No completed timed sessions recorded yet. Arm the bot with a 15m or 20m timeslot to begin recording.")
 
+                # Active Model Weight Cards
+                active_results = quant_zoo_results.get("model_results", [])
+                if active_results:
+                    m_cols = st.columns(len(active_results))
+                    for idx, m in enumerate(active_results):
+                        with m_cols[idx]:
+                            st.markdown(
+                                f"""
+                                <div style="background: rgba(255, 255, 255, 0.025); border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 9px; padding: 6px 8px; text-align: center;">
+                                    <div style="font-size: 0.68rem; color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{m['short_label']}</div>
+                                    <div class="mono" style="font-size: 0.95rem; font-weight: 700; color: #38bdf8;">{m.get('weight_pct', 0.0):.0f}%</div>
+                                    <div class="mono" style="font-size: 0.72rem; color: #cbd5e1;">${m['p50']:,.2f}</div>
+                                </div>
+                                """,
+                                unsafe_allow_html=True,
+                            )
 
-# ---------------------------------------------------------------------------
-#  Tab 2: Institutional Strategy Tournament Arena
-# ---------------------------------------------------------------------------
-def _render_strategy_arena() -> None:
-    st.markdown("### ⚔️ Institutional Multi-Strategy Tournament Arena")
-    st.markdown(
-        r"""
-        Pit the world's most elite quantitative hedge fund strategies against one another in real time:
-        1. **Deep Quantile Sniper**: Probabilistic asymmetric quantile forecasts (LSTM + XGBoost) with RRR $\ge 1.5$x
-        2. **Institutional Whale Flow**: Large-block volume anomaly detection anchored to dynamic VWAP bands
-        3. **Volatility Breakout**: Multi-period Donchian channel expansion filtered by ADX trend acceleration
-        4. **Statistical Mean Reversion**: 2.5-Sigma Bollinger Band extremes paired with multi-timeframe RSI exhaustion
-        5. **Ensemble Alpha**: Meta-consensus voting algorithm combining all 4 signals
-        """
-    )
+        # ══════════════════════════════════════════════════════════════════════════
+        # RIGHT COLUMN: Stacked Panes (Proof-of-Edge Bot + Wealthsimple Order)
+        # ══════════════════════════════════════════════════════════════════════════
+        with right_col:
+            # ─────────────────────────────────────────────────────────────────────
+            # PANE 2 (Top-Right): Virtual Bot & Proof-of-Edge Gauge
+            # ─────────────────────────────────────────────────────────────────────
+            with st.container(border=True):
+                v_acct = db.get_or_create_virtual_account(USER_ID)
+                v_cash = float(v_acct["virtual_cash_cad"])
+                open_positions = db.get_virtual_positions(USER_ID)
 
-    col_btn, col_cap = st.columns([1.5, 3])
-    with col_btn:
-        run_arena = st.button("⚔️ Launch Tournament", use_container_width=True, type="primary")
+                # Mark to market open positions
+                open_positions_val_cad = 0.0
+                for pos in open_positions:
+                    pos_ticker = pos["ticker"]
+                    pos_qty = float(pos["quantity"])
+                    pos_p = current_price if pos_ticker == active_symbol else float(pos["current_price"])
+                    fx = 1.39 if ("USD" in str(pos.get("currency", "")) or active_asset.currency == "USD") else 1.0
+                    open_positions_val_cad += pos_qty * pos_p * fx
 
-    df = st.session_state.get("feat_df")
-    if df is None or len(df) < 30:
-        df = st.session_state.raw_df
+                total_virtual_equity = v_cash + open_positions_val_cad
+                v_start = float(v_acct.get("starting_virtual_cad", 10000.0))
+                net_total_pct = ((total_virtual_equity - v_start) / v_start) * 100.0
+                eq_class = "delta-pos" if net_total_pct >= 0 else "delta-neg"
 
-    if df is None or len(df) < 30:
-        st.warning("Please load or fetch historical data in the sidebar before launching tournament.")
-        return
+                # Top Row: Virtual Equity & Status
+                v_head1, v_head2 = st.columns([6, 4])
+                with v_head1:
+                    st.markdown(
+                        f"""
+                        <div>
+                            <div style="font-size: 0.74rem; color: #94a3b8; text-transform: uppercase;">Total Virtual Equity</div>
+                            <div class="mono" style="font-size: 1.45rem; font-weight: 700; color: #ffffff;">${total_virtual_equity:,.2f} CAD</div>
+                            <div class="{eq_class}" style="font-size: 0.78rem;">{net_total_pct:+.2f}% total (Cash: ${v_cash:,.2f})</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                with v_head2:
+                    if efficiency_summary.readiness_state == "PROVEN_EDGE":
+                        st.markdown(f'<div class="readiness-proven">{efficiency_summary.readiness_badge}</div>', unsafe_allow_html=True)
+                    elif efficiency_summary.readiness_state == "CALIBRATING":
+                        st.markdown(f'<div class="readiness-calibrating">{efficiency_summary.readiness_badge}</div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown(f'<div class="readiness-avoid">{efficiency_summary.readiness_badge}</div>', unsafe_allow_html=True)
 
-    if run_arena:
-        with st.spinner("Simulating multi-strategy execution across historical microstructure…"):
-            try:
-                arena = StrategyArena(
-                    initial_capital=100_000.0,
-                    strategies=[
-                        DeepQuantileSniper(),
-                        InstitutionalWhaleFlow(),
-                        VolatilityBreakout(),
-                        StatisticalMeanReversion(),
-                        EnsembleAlpha(),
-                    ]
-                )
-                pred = st.session_state.get("prediction")
-                results = arena.run_tournament(df, ticker=st.session_state.ticker, starting_capital=100_000.0, prediction=pred)
-                st.session_state.arena_results = results
-                st.toast("✅ Strategy Tournament completed!", icon="⚔️")
-            except Exception as e:
-                logger.error("Tournament error: %s", e, exc_info=True)
-                st.error(f"❌ Tournament execution error: {e}")
+                # Open Position or Manual Buy Trigger
+                curr_pair_pos = next((p for p in open_positions if p["ticker"] == active_symbol), None)
+                if curr_pair_pos:
+                    pos_entry = float(curr_pair_pos["entry_price"])
+                    pos_qty = float(curr_pair_pos["quantity"])
+                    u_pnl = (current_price - pos_entry) * pos_qty
+                    u_pnl_pct = ((current_price - pos_entry) / pos_entry) * 100.0
+                    u_cls = "delta-pos" if u_pnl >= 0 else "delta-neg"
 
-    results = st.session_state.get("arena_results")
-    if results and isinstance(results, list):
-        # 1-Click Strategy Deployment Banner
-        top_champ = results[0]
-        col_champ_info, col_champ_btn = st.columns([2.5, 1.5])
-        with col_champ_info:
-            st.info(f"🏆 Current Tournament Leader: **{top_champ.strategy_name}** | Return: **{top_champ.total_return_pct:+0.2f}%** | Sharpe: **{top_champ.sharpe_ratio:.2f}** | Trades: **{top_champ.total_trades}**")
-        with col_champ_btn:
-            st.write("")
-            if st.button("🏆 DEPLOY CHAMPION TO LIVE BOT", key="deploy_champ_btn", type="primary", use_container_width=True):
-                strat_map = {
-                    "Deep Quantile Sniper": DeepQuantileSniper(),
-                    "Institutional Whale Flow": InstitutionalWhaleFlow(),
-                    "Volatility Breakout": VolatilityBreakout(),
-                    "Statistical Mean Reversion": StatisticalMeanReversion(),
-                    "Ensemble Alpha": EnsembleAlpha(),
-                }
-                chosen_strat = strat_map.get(top_champ.strategy_name, EnsembleAlpha())
-                st.session_state.bot.strategy = chosen_strat
-                st.session_state.active_strategy = top_champ.strategy_name
-                if "user" in st.session_state and st.session_state.user:
-                    st.session_state.db.save_user_settings(user_id=st.session_state.user["id"], active_strategy=top_champ.strategy_name)
-                st.toast(f"✅ Deployed {top_champ.strategy_name} to Live Autonomous Sniper Bot!", icon="🚀")
+                    # Trailing stop ratchet assessment
+                    ratchet_info = TrailingStopRatchet.evaluate_stop(
+                        entry_price=pos_entry,
+                        current_price=current_price,
+                        initial_stop_price=float(curr_pair_pos.get("stop_p10", pos_entry * 0.95)),
+                        target_price=float(curr_pair_pos.get("target_p90", pos_entry * 1.05)),
+                        round_trip_fee_pct=0.08,
+                    )
 
-        # Podium
-        st.markdown("#### 🏆 Tournament Leaderboard")
-        top3 = results[:3]
-        col_gold, col_silver, col_bronze = st.columns(3)
-        trophies = ["🥇 1st Place", "🥈 2nd Place", "🥉 3rd Place"]
+                    st.markdown(
+                        f"""
+                        <div style="background: rgba(56, 189, 248, 0.06); border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 9px; padding: 8px 10px; margin: 8px 0;">
+                            <div style="display: flex; justify-content: space-between; font-size: 0.78rem;">
+                                <span><b>Active Virtual Position:</b> {pos_qty:.4f} {active_asset.ws_display_symbol}</span>
+                                <span class="{u_cls}"><b>{u_pnl_pct:+.2f}% (${u_pnl:+.2f} CAD)</b></span>
+                            </div>
+                            <div style="font-size: 0.72rem; color: #94a3b8; margin-top: 3px;">
+                                Entry: ${pos_entry:,.2f} • {ratchet_info['desc']}
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    if st.button("✖ Close Virtual Position Now", use_container_width=True):
+                        res = virtual_bot_engine.manual_close_position(USER_ID, active_asset, current_price)
+                        st.success(f"Closed {active_symbol}: Net P&L ${res.get('net_pnl_cad', 0.0):+,.2f} CAD")
+                        st.rerun()
+                else:
+                    st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
+                    c_test, c_arm = st.columns([1.2, 1.0])
+                    with c_test:
+                        if st.button("⚡ Paper Buy ($500 CAD)", use_container_width=True, help="Test this forecast on virtual cash immediately"):
+                            res = virtual_bot_engine.manual_open_position(
+                                user_id=USER_ID,
+                                asset=active_asset,
+                                current_price=current_price,
+                                p10_stop=consensus_p10,
+                                p50_target=consensus_p50,
+                                p90_target=consensus_p90,
+                                capital_cad=500.0,
+                                horizon_bars=horizon_bars,
+                            )
+                            if res["status"] == "POSITION_OPENED":
+                                st.success(f"Paper trade opened: {res['quantity']} {active_symbol} @ ${current_price:,.2f}")
+                                st.rerun()
+                            else:
+                                st.error(res.get("message", "Unable to open virtual position."))
 
-        for idx, (col, r) in enumerate(zip([col_gold, col_silver, col_bronze], top3)):
-            with col:
+                    with c_arm:
+                        is_armed = st.session_state["is_armed"]
+                        arm_label = "⏸ Pause Bot" if is_armed else "▶ Arm Bot"
+                        if st.button(arm_label, use_container_width=True):
+                            new_armed = not is_armed
+                            st.session_state["is_armed"] = new_armed
+                            db.update_virtual_account(USER_ID, is_armed=new_armed)
+                            st.rerun()
+
+                # 60-Bar Walk-Forward Metrics
                 st.markdown(
                     f"""
-                    <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 12px; padding: 14px; text-align: center;">
-                        <h4 style="margin: 0; color: #f59e0b;">{trophies[idx]}</h4>
-                        <h3 style="margin: 6px 0; color: #38bdf8;">{getattr(r, 'strategy_name', '')}</h3>
-                        <p style="font-size: 1.2rem; font-weight: 700; color: {'#10b981' if getattr(r, 'total_return_pct', 0) >= 0 else '#ef4444'}; margin: 0;">
-                            {getattr(r, 'total_return_pct', 0):+0.2f}%
-                        </p>
-                        <small style="color: #94a3b8;">Sharpe: {getattr(r, 'sharpe_ratio', 0):.2f} | Win Rate: {getattr(r, 'win_rate', 0):.1f}% | Trades: {getattr(r, 'total_trades', 0)}</small>
+                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 8px;">
+                        <div style="background: rgba(255,255,255,0.02); padding: 5px; border-radius: 8px; text-align: center;">
+                            <div style="font-size: 0.65rem; color: #94a3b8;">Win Rate</div>
+                            <div class="mono" style="font-size: 0.88rem; font-weight: 700;">{efficiency_summary.win_rate_pct:.0f}%</div>
+                        </div>
+                        <div style="background: rgba(255,255,255,0.02); padding: 5px; border-radius: 8px; text-align: center;">
+                            <div style="font-size: 0.65rem; color: #94a3b8;">Hit Rate</div>
+                            <div class="mono" style="font-size: 0.88rem; font-weight: 700;">{efficiency_summary.hit_rate_pct:.0f}%</div>
+                        </div>
+                        <div style="background: rgba(255,255,255,0.02); padding: 5px; border-radius: 8px; text-align: center;">
+                            <div style="font-size: 0.65rem; color: #94a3b8;">Profit Factor</div>
+                            <div class="mono" style="font-size: 0.88rem; font-weight: 700;">{efficiency_summary.profit_factor:.2f}</div>
+                        </div>
+                        <div style="background: rgba(255,255,255,0.02); padding: 5px; border-radius: 8px; text-align: center;">
+                            <div style="font-size: 0.65rem; color: #94a3b8;">Fees Paid</div>
+                            <div class="mono" style="font-size: 0.88rem; font-weight: 700; color: #fb7185;">${efficiency_summary.total_ws_fees_cad:.1f}</div>
+                        </div>
                     </div>
                     """,
                     unsafe_allow_html=True,
                 )
 
-        st.markdown("<br/>", unsafe_allow_html=True)
-
-        # Full Leaderboard Table
-        summary_rows = [r.to_dict() if hasattr(r, "to_dict") else r for r in results]
-        st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
-
-        # Comparative Head-to-Head Equity Curves
-        st.markdown("#### 📈 Head-to-Head Comparative Equity Curves")
-        fig = go.Figure()
-        palette = ["#38bdf8", "#10b981", "#f59e0b", "#ec4899", "#8b5cf6"]
-
-        for idx, r in enumerate(results):
-            curve = getattr(r, "equity_curve", None)
-            if curve:
-                name = getattr(r, "strategy_name", f"Strategy {idx+1}")
-                fig.add_trace(
-                    go.Scatter(
-                        y=curve,
-                        mode="lines",
-                        name=name,
-                        line=dict(color=palette[idx % len(palette)], width=2.5),
-                    )
-                )
-
-        fig.add_hline(
-            y=100_000.0,
-            line_dash="dash",
-            line_color="#64748b",
-            annotation_text="Starting Capital: $100,000",
-        )
-        fig.update_layout(
-            template="plotly_dark",
-            height=400,
-            yaxis_title="Portfolio Equity ($)",
-            xaxis_title="Simulation Step",
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(15, 23, 42, 0.6)",
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        # Strategy Trade Execution Inspector
-        st.markdown("#### 🔍 Strategy Trade Execution Inspector")
-        st.caption("Inspect individual fills, entry/exit prices, and realised P&L per strategy from the tournament simulation:")
-        s_names = [r.strategy_name for r in results]
-        sel_strat = st.selectbox("Select Strategy to Inspect", s_names, key="sel_strat_inspect")
-        matched_r = next((r for r in results if r.strategy_name == sel_strat), None)
-        if matched_r and getattr(matched_r, "trades", None):
-            t_df = pd.DataFrame(matched_r.trades)
-            st.dataframe(t_df, use_container_width=True, hide_index=True)
-        else:
-            st.caption(f"No individual fills recorded for {sel_strat} during this tournament run.")
-
-
-# ---------------------------------------------------------------------------
-#  Tab 3: Deep Learning Training & Simulated/Dummy Training Studio
-# ---------------------------------------------------------------------------
-def _render_training_studio() -> None:
-    st.markdown("### 🧪 Deep Learning Model Training & Simulation Studio")
-    st.markdown(
-        """
-        Train institutional-grade probabilistic quantile architectures (Stacked LSTM + XGBoost Monotonic Quantiles).
-        Harnesses your laptop's **NVIDIA GeForce RTX 4070 GPU** for real-time model convergence.
-        """
-    )
-
-    st.markdown(
-        """
-        <div style="background: linear-gradient(135deg, rgba(15, 23, 42, 0.8) 0%, rgba(30, 41, 59, 0.8) 100%);
-                    border: 1px solid rgba(59, 130, 246, 0.4); border-radius: 12px; padding: 14px; margin-bottom: 16px;">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div>
-                    <span style="font-weight: 800; color: #38bdf8; font-size: 1.05rem;">🚀 HARDWARE ACCELERATION ENGINE</span>
-                    <div style="font-size: 0.85rem; color: #94a3b8; margin-top: 4px;">
-                        NVIDIA GeForce RTX 4070 Laptop GPU • CUDA 12.4 • cuDNN FP32/FP16 Tensor Cores Active
+            # ─────────────────────────────────────────────────────────────────────
+            # PANE 3 (Bottom-Right): Wealthsimple Mobile Execution Ticket & Real Positions
+            # ─────────────────────────────────────────────────────────────────────
+            with st.container(border=True):
+                st.markdown(
+                    """
+                    <div style="font-size: 0.82rem; color: #94a3b8; font-weight: 600; margin-bottom: 8px;">
+                        WEALTHSIMPLE REAL-MONEY ORDER TICKET
                     </div>
-                </div>
-                <div style="text-align: right;">
-                    <span class="bull-badge">GPU ACTIVE</span>
-                </div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    mode = st.radio(
-        "Training Mode",
-        [
-            "🚀 Full Production Deep Learning (PyTorch CUDA + XGBoost on RTX 4070)",
-            "⚡ Rapid Simulated / Instant Training (Quick Preview)",
-        ],
-        index=0,
-    )
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        epochs = st.slider("LSTM Epochs", 5, 100, 25 if "Production" in mode else 15)
-    with col2:
-        seq_len = st.selectbox("Sequence Window Length", [10, 20, 30, 60], index=1)
-    with col3:
-        xgb_trees = st.slider("XGBoost Quantile Estimators", 50, 300, 100)
-
-    if st.button("🧠 Train Deep Neural Network on RTX 4070", type="primary", use_container_width=True):
-        feat = st.session_state.get("feat_df")
-        if feat is None or feat.empty:
-            st.error("No feature dataset loaded. Please sync market data in sidebar first.")
-            return
-
-        engine: AIEngine = st.session_state.engine
-        progress_bar = st.progress(0, text="Initializing PyTorch CUDA Quantile Network…")
-        loss_placeholder = st.empty()
-
-        try:
-            if "Simulated" in mode:
-                # Simulated / Dummy Training with live animated loss progression
-                losses = []
-                for ep in range(1, epochs + 1):
-                    time.sleep(0.03)
-                    loss = 0.05 * np.exp(-ep / 8) + np.random.uniform(0.002, 0.006)
-                    losses.append(loss)
-                    progress_bar.progress(int(ep / epochs * 100), text=f"Epoch {ep}/{epochs} — Pinball Loss: {loss:.6f}")
-
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(y=losses, mode="lines+markers", line=dict(color="#38bdf8", width=2), name="Quantile Loss"))
-                fig.update_layout(
-                    title="Simulated Training Convergence (P10 / P50 / P90 Loss)",
-                    template="plotly_dark",
-                    height=280,
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(15, 23, 42, 0.6)",
+                    """,
+                    unsafe_allow_html=True,
                 )
-                loss_placeholder.plotly_chart(fig, use_container_width=True)
 
-                result = engine.train(feat, target_col="Close")
-                st.session_state.trained = True
-                st.toast("✅ Quick Model Training Completed!", icon="🧠")
+                # Route Toggle & Fixed Fee Math
+                exec_symbol = active_asset.ws_display_symbol
+                exec_asset = active_asset
+                exec_price = current_price
+                savings_note = None
 
-            else:
-                # Full Production GPU Training
-                with st.spinner("Training Stacked LSTM & XGBoost on NVIDIA GeForce RTX 4070 Laptop GPU…"):
-                    result = engine.train(feat, target_col="Close")
-                    st.session_state.trained = True
-                    progress_bar.progress(100, text="GPU Training Complete!")
+                if active_asset.alt_cad_proxy:
+                    proxy_asset = WealthsimpleCatalog.resolve_asset(active_asset.alt_cad_proxy)
+                    use_proxy = st.toggle(
+                        f"Route via {active_asset.alt_cad_proxy} ($0 Comm / Save Fees)",
+                        value=True,
+                        help=f"Execute via Canadian proxy {active_asset.alt_cad_proxy} to eliminate US FX or crypto spread fees.",
+                    )
+                    if use_proxy:
+                        exec_asset = proxy_asset
+                        exec_symbol = proxy_asset.ws_display_symbol
+                        proxy_df = fetch_asset_history(active_asset.alt_cad_proxy, "1h")
+                        exec_price = float(proxy_df["Close"].iloc[-1])
 
-                    # Show loss progression if available
-                    if hasattr(engine, "training_history") and engine.training_history:
-                        fig = go.Figure()
-                        fig.add_trace(go.Scatter(y=engine.training_history, mode="lines", line=dict(color="#10b981", width=2), name="Pinball Loss"))
-                        fig.update_layout(
-                            title="PyTorch CUDA Loss Convergence Curve",
-                            template="plotly_dark",
-                            height=280,
-                            paper_bgcolor="rgba(0,0,0,0)",
-                            plot_bgcolor="rgba(15, 23, 42, 0.6)",
+                        # Exact fee calculation on proxy asset
+                        direct_fee = WealthsimpleFeeSchedule.calculate_fee(active_asset, st.session_state["allocated_capital"], st.session_state["ws_tier"], st.session_state["usd_account"])
+                        proxy_fee = WealthsimpleFeeSchedule.calculate_fee(proxy_asset, st.session_state["allocated_capital"], st.session_state["ws_tier"], st.session_state["usd_account"])
+                        savings_cad = direct_fee.round_trip_fee_cad - proxy_fee.round_trip_fee_cad
+                        if savings_cad > 0.05:
+                            savings_note = f"💰 Proxy saves ~${savings_cad:,.2f} CAD in Wealthsimple round-trip fees!"
+
+                # Quarter-Kelly Optimal Position Sizing
+                total_equity_val = total_virtual_equity
+                kelly_result: PositionSizeResult = PositionRiskSizer.calculate_position_size(
+                    total_equity_cad=total_equity_val,
+                    current_price=exec_price,
+                    p10_stop=consensus_p10,
+                    p90_target=consensus_p90,
+                    hit_rate_pct=efficiency_summary.hit_rate_pct,
+                    round_trip_fee_pct=0.08,
+                )
+
+                c_alloc_in, c_alloc_btn = st.columns([2.2, 1.8])
+                with c_alloc_in:
+                    alloc_cad = st.number_input(
+                        "Capital ($ CAD)",
+                        min_value=50.0,
+                        max_value=250000.0,
+                        value=float(st.session_state["allocated_capital"]),
+                        step=100.0,
+                        key="alloc_cad_input",
+                    )
+                    st.session_state["allocated_capital"] = alloc_cad
+
+                with c_alloc_btn:
+                    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+                    if st.button(f"🎯 Apply Kelly (${kelly_result.recommended_cad:,.0f})", use_container_width=True):
+                        st.session_state["allocated_capital"] = kelly_result.recommended_cad
+                        st.rerun()
+
+                if savings_note:
+                    st.caption(f"<span style='color: #34d399; font-size: 0.74rem;'>{savings_note}</span>", unsafe_allow_html=True)
+                if kelly_result.heat_warning:
+                    st.caption(f"<span style='color: #fbbf24; font-size: 0.74rem;'>{kelly_result.heat_warning}</span>", unsafe_allow_html=True)
+
+                # Price Targets
+                limit_entry = exec_price
+                take_profit = round(exec_price * (1.0 + (consensus_exp_return_pct / 100.0 if consensus_exp_return_pct > 0 else 0.03)), 2)
+                stop_loss = round(exec_price * (1.0 - (0.02 if consensus_exp_return_pct > 0 else 0.04)), 2)
+                shares = alloc_cad / max(exec_price, 1e-4)
+
+                # 3 Real 1-Click Clipboard Copy Cards
+                c_ent, c_tp, c_sl = st.columns(3)
+                with c_ent:
+                    render_copy_card("Limit Entry", f"${limit_entry:,.2f}", "Wealthsimple Limit", "#38bdf8")
+                with c_tp:
+                    render_copy_card("Take Profit", f"${take_profit:,.2f}", "P90 Target", "#34d399")
+                with c_sl:
+                    render_copy_card("Stop Loss", f"${stop_loss:,.2f}", "P10 Stop", "#fb7185")
+
+                st.markdown(
+                    f"""
+                    <div style="display: flex; justify-content: space-between; font-size: 0.76rem; color: #94a3b8; margin: 6px 0 10px 0;">
+                        <span>Order Size: <b>{shares:.4f} {exec_symbol}</b></span>
+                        <span>Max Risk at Stop: <b>${kelly_result.dollar_risk_at_stop:,.2f} CAD</b></span>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                # Log Real Fill Button
+                c_fill_btn, c_real_info = st.columns([1.4, 1.0])
+                with c_fill_btn:
+                    if st.button("📲 Log Real Wealthsimple Fill", use_container_width=True):
+                        tx_id = f"WS-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{int(time.time()) % 1000:03d}"
+                        db.save_real_ws_position({
+                            "tx_id": tx_id,
+                            "profile_id": USER_ID,
+                            "ticker": active_symbol,
+                            "ws_symbol": exec_symbol,
+                            "route_type": "CAD_PROXY" if exec_symbol != active_symbol else "DIRECT",
+                            "status": "OPEN",
+                            "entry_price": limit_entry,
+                            "current_price": limit_entry,
+                            "quantity": shares,
+                            "capital_cad": alloc_cad,
+                            "target_price": take_profit,
+                            "stop_price": stop_loss,
+                            "trailing_stop_price": stop_loss,
+                            "est_fee_cad": 0.40 if exec_symbol != active_symbol else 1.50,
+                        })
+                        st.success(f"Logged real {exec_symbol} trade {tx_id} to {active_profile.display_name}'s ledger!")
+                        st.rerun()
+
+                # Active Real Wealthsimple Positions Monitor
+                real_positions = db.get_real_ws_positions(USER_ID, status="OPEN")
+                if real_positions:
+                    st.markdown("<div style='margin-top: 8px; font-size: 0.76rem; font-weight: 700; color: #38bdf8;'>ACTIVE REAL WEALTHSIMPLE TRADES</div>", unsafe_allow_html=True)
+                    for rp in real_positions:
+                        rp_entry = float(rp["entry_price"])
+                        rp_qty = float(rp["quantity"])
+                        rp_curr = current_price if rp["ticker"] == active_symbol else rp_entry
+                        rp_pnl = (rp_curr - rp_entry) * rp_qty
+                        rp_pct = ((rp_curr - rp_entry) / rp_entry) * 100.0
+                        p_cls = "delta-pos" if rp_pnl >= 0 else "delta-neg"
+
+                        st.markdown(
+                            f"""
+                            <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 6px 10px; margin-bottom: 4px;">
+                                <div style="display: flex; justify-content: space-between; font-size: 0.76rem;">
+                                    <span><b>{rp['ws_symbol']}</b> ({rp['tx_id']})</span>
+                                    <span class="{p_cls}"><b>{rp_pct:+.2f}% (${rp_pnl:+.2f} CAD)</b></span>
+                                </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
                         )
-                        loss_placeholder.plotly_chart(fig, use_container_width=True)
-
-                    st.toast(f"✅ GPU Training Complete in {result.duration_sec:.1f}s | Meta MAE: {result.meta_mae:.4f}", icon="🚀")
-
-            # Generate fresh prediction immediately
-            pred = engine.predict(feat)
-            st.session_state.prediction = pred
-        except Exception as e:
-            logger.error("Training error: %s", e, exc_info=True)
-            st.error(f"❌ Training failed: {e}")
-
-    # Calibration & Monotonicity Verification Report
-    pred = st.session_state.get("prediction")
-    if pred is not None:
-        st.markdown("#### 🔬 Quantile Calibration & Monotonicity Verification")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.metric("Quantile Monotonicity", "100.0%", "P10 ≤ P50 ≤ P90 Guaranteed")
-        with c2:
-            st.metric("Predicted Direction", pred.direction, f"{pred.confidence:.1%} Confidence")
-        with c3:
-            st.metric("Forecast Spread", f"${pred.p90 - pred.p10:,.2f}", f"P50: ${pred.p50:,.2f}")
-
-        # 1-Click Activate in Live Bot Button
-        col_act1, col_act2 = st.columns([2.5, 1.5])
-        with col_act1:
-            st.info(f"✨ Model Ready: **{pred.direction}** bias with **{pred.confidence:.1%}** confidence. P10: **${pred.p10:,.2f}** | P50: **${pred.p50:,.2f}** | P90: **${pred.p90:,.2f}**")
-        with col_act2:
-            st.write("")
-            if st.button("🚀 ACTIVATE IN LIVE BOT", key="act_model_live_btn", type="primary", use_container_width=True):
-                st.session_state.bot.ai_engine = st.session_state.engine
-                st.session_state.prediction = pred
-                try:
-                    st.session_state.engine.save("latest")
-                except Exception:
-                    pass
-                st.toast("🚀 New Deep Learning weights activated in Live Autonomous Bot!", icon="⚡")
-
-        # Visual Price Quantile Cone & Feature Importance
-        col_cone, col_feat = st.columns([1.6, 1])
-
-        with col_cone:
-            st.markdown("##### 📈 10-Bar Forward Quantile Price Cone")
-            cur_price = pred.current_price if hasattr(pred, "current_price") else float(st.session_state.raw_df["Close"].iloc[-1])
-            x_steps = [f"T+{i}" for i in range(1, 11)]
-
-            # Form fan-out curves from current price to P10/P50/P90
-            p10_path = [cur_price + (pred.p10 - cur_price) * (i / 10.0) for i in range(1, 11)]
-            p50_path = [cur_price + (pred.p50 - cur_price) * (i / 10.0) for i in range(1, 11)]
-            p90_path = [cur_price + (pred.p90 - cur_price) * (i / 10.0) for i in range(1, 11)]
-
-            cone_fig = go.Figure()
-            cone_fig.add_trace(go.Scatter(x=x_steps, y=p90_path, mode="lines", line=dict(color="#10b981", width=1.5), name="P90 Bull Ceiling"))
-            cone_fig.add_trace(go.Scatter(x=x_steps, y=p10_path, mode="lines", fill="tonexty", fillcolor="rgba(56, 189, 248, 0.12)", line=dict(color="#ef4444", width=1.5), name="P10 Bear Floor"))
-            cone_fig.add_trace(go.Scatter(x=x_steps, y=p50_path, mode="lines+markers", line=dict(color="#38bdf8", width=2.5, dash="dash"), name="P50 Expected Median"))
-            cone_fig.add_hline(y=cur_price, line_dash="dot", line_color="#94a3b8", annotation_text=f"Current: ${cur_price:,.2f}")
-            cone_fig.update_layout(
-                template="plotly_dark",
-                height=320,
-                margin=dict(l=20, r=20, t=30, b=20),
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(15, 23, 42, 0.6)",
-                yaxis_title="Price ($ CAD)",
-                legend=dict(orientation="h", y=1.05, x=0.01),
-            )
-            st.plotly_chart(cone_fig, use_container_width=True)
-
-        with col_feat:
-            st.markdown("##### 📊 Feature Importance Pareto")
-            top_features = [
-                ("Whale_Z", 0.28),
-                ("VWAP_Diff", 0.22),
-                ("ATR_14", 0.18),
-                ("BB_Width", 0.14),
-                ("RSI_14", 0.10),
-                ("ADX_14", 0.08),
-            ]
-            f_names = [f[0] for f in top_features]
-            f_scores = [f[1] for f in top_features]
-            feat_fig = go.Figure(go.Bar(
-                x=f_scores,
-                y=f_names,
-                orientation="h",
-                marker=dict(color=["#38bdf8", "#10b981", "#fbbf24", "#c084fc", "#f43f5e", "#64748b"]),
-            ))
-            feat_fig.update_layout(
-                template="plotly_dark",
-                height=320,
-                margin=dict(l=20, r=20, t=30, b=20),
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(15, 23, 42, 0.6)",
-                xaxis_title="Relative Weight",
-                yaxis=dict(autorange="reversed"),
-            )
-            st.plotly_chart(feat_fig, use_container_width=True)
-
-        # Checkpoint manager
-        st.markdown("#### 💾 Model Checkpoint Manager")
-        tag = f"{st.session_state.ticker}_{st.session_state.timeframe}"
-        if st.button(f"Save Weights as '{tag}'"):
-            try:
-                engine = st.session_state.engine
-                engine.save(tag)
-                engine.save("latest")
-                st.success(f"Checkpoint saved to models/hfp/{tag}")
-            except Exception as e:
-                st.error(f"Failed to save checkpoint: {e}")
+                        if st.button(f"Close Real {rp['ws_symbol']} ({rp['tx_id']})", key=f"btn_close_rp_{rp['tx_id']}"):
+                            db.close_real_ws_position(rp["tx_id"], exit_price=rp_curr, exit_reason="MANUAL_REAL_CLOSE")
+                            st.success(f"Real trade {rp['tx_id']} closed at ${rp_curr:,.2f}!")
+                            st.rerun()
 
 
-# ---------------------------------------------------------------------------
-#  Tab 4: Multi-Asset Radar & Whale Scanner
-# ---------------------------------------------------------------------------
-def _render_market_radar() -> None:
-    st.markdown("### 📡 Multi-Asset Market Radar & Institutional Whale Scanner")
-    wm: WatchlistManager = st.session_state.watchlist
-    lake: DataLake = st.session_state.lake
+    # ─────────────────────────────────────────────────────────────────────────────
+    # 10. VIEW 2: ML/DL LAB & MULTI-PAIR ALPHA SCANNER
+    # ─────────────────────────────────────────────────────────────────────────────
+    elif st.session_state["view_mode"] == "ML/DL Lab & Scanner":
+        s_col1, s_col2 = st.columns([5.5, 4.5])
 
-    col_cat, col_btn = st.columns([3, 1])
-    with col_cat:
-        scan_cat = st.selectbox(
-            "Scan Category",
-            ["All Assets", "Crypto", "US Mega-Cap Stocks", "Canadian Equities", "ETFs"],
-        )
-    with col_btn:
-        st.write("")
-        st.write("")
-        run_scan = st.button("⚡ Scan Market", use_container_width=True, type="primary")
+        with s_col1:
+            with st.container(border=True):
+                st.markdown("#### 🔥 Multi-Pair Net-EV Alpha Opportunity Scanner")
+                st.caption("Scans liquid Wealthsimple TSX/NEO/US/Crypto universe, ranking setups by Net Expected Value % after Wealthsimple fees.")
 
-    if run_scan:
-        tickers = []
-        if scan_cat == "All Assets":
-            tickers = wm.get_all_tickers()
-        elif scan_cat == "Crypto":
-            tickers = wm.get_tickers(AssetCategory.CRYPTO)
-        elif scan_cat == "US Mega-Cap Stocks":
-            tickers = wm.get_tickers(AssetCategory.US_STOCKS)
-        elif scan_cat == "Canadian Equities":
-            tickers = wm.get_tickers(AssetCategory.CANADIAN_STOCKS)
-        elif scan_cat == "ETFs":
-            tickers = wm.get_tickers(AssetCategory.ETFS)
+                if st.button("🔥 Run Universe Alpha Scan", use_container_width=True):
+                    AlphaScanner._cached_scan = None
+                    st.rerun()
 
-        with st.spinner(f"Scanning {len(tickers)} institutional assets…"):
-            try:
-                results = lake.scan_watchlist(tickers, timeframe=st.session_state.timeframe, lookback="3mo")
-                st.session_state.radar_results = results
-            except Exception as e:
-                logger.error("Scan error: %s", e, exc_info=True)
-                st.error(f"❌ Market scan failed: {e}")
+                opportunities = AlphaScanner.scan_opportunities()
+                if opportunities:
+                    for opp in opportunities:
+                        act_color = "#34d399" if opp.action in ("STRONG_BUY", "TACTICAL_BUY") else ("#fbbf24" if opp.action == "WAIT_CHOP" else "#fb7185")
+                        st.markdown(
+                            f"""
+                            <div style="background: rgba(255, 255, 255, 0.025); border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 12px; padding: 12px 14px; margin-bottom: 8px;">
+                                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                                    <span style="font-size: 1.1rem; font-weight: 700; color: #ffffff;">{opp.symbol} <span style="font-size: 0.76rem; color: #94a3b8;">({opp.name[:22]})</span></span>
+                                    <span class="mono" style="font-size: 1.05rem; font-weight: 700; color: {act_color};">Net EV {opp.net_ev_pct:+.2f}%</span>
+                                </div>
+                                <div style="display: flex; gap: 10px; font-size: 0.76rem; color: #94a3b8; margin: 4px 0;">
+                                    <span>Price: <b>${opp.current_price:,.2f}</b></span>
+                                    <span>Target: <b style="color: #34d399;">${opp.target_price:,.2f}</b> (+{opp.upside_pct:.1f}%)</span>
+                                    <span>Stop: <b style="color: #fb7185;">${opp.p10_stop:,.2f}</b> (-{opp.downside_pct:.1f}%)</span>
+                                    <span>WS Fee: <b>{opp.round_trip_fee_pct:.2f}%</b></span>
+                                </div>
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
+                                    <span style="font-size: 0.72rem; color: #64748b;">Optimal Route: <b>{opp.optimal_route_symbol}</b> • {opp.tfsa_status}</span>
+                                </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                        if st.button(f"Load {opp.symbol} into Workspace", key=f"btn_scan_load_{opp.symbol}"):
+                            st.session_state["active_symbol"] = opp.symbol
+                            st.session_state["view_mode"] = "Workspace"
+                            st.rerun()
 
-    radar_df = st.session_state.get("radar_results")
-    if radar_df is not None and not radar_df.empty:
-        st.dataframe(radar_df, use_container_width=True, hide_index=True)
-        tickers_list = radar_df["Ticker"].tolist() if "Ticker" in radar_df.columns else []
-        if tickers_list:
-            sel_sym = st.selectbox("Select Asset to Load into Live Cockpit", tickers_list)
-            if st.button("🚀 Load into Live Cockpit"):
-                st.session_state.ticker = sel_sym
-                _reload_active_asset()
-                st.rerun()
+        with s_col2:
+            with st.container(border=True):
+                st.markdown("#### 🔬 8-Model ML/DL Quant Zoo Inspector")
+                st.caption(f"Asset: **{active_symbol}** • Category: **{active_asset.category}** • Regime: **{active_regime.value}**")
+
+                # Retrain Trigger
+                if st.button("🚀 Force Retrain & Recalibrate Models", use_container_width=True):
+                    with st.spinner("Retraining PyTorch DL & Quantile models on fresh bars..."):
+                        t_start = time.time()
+                        res = ModelZooEngine.train_and_evaluate(
+                            df=df_bars,
+                            asset=active_asset,
+                            selected_model_ids=list(ALL_QUANT_MODELS.keys()),
+                            horizon_bars=horizon_bars,
+                            blending_mode=st.session_state["blending_mode"],
+                            force_retrain=True,
+                        )
+                        t_dur_ms = int((time.time() - t_start) * 1000)
+                    st.success(f"All 8 Quant Models retrained & calibrated in {t_dur_ms} ms!")
+                    st.rerun()
+
+                # Performance Matrix
+                model_table = []
+                for mid, m_inst in ALL_QUANT_MODELS.items():
+                    m_res = next((r for r in quant_zoo_results.get("model_results", []) if r["model_id"] == mid), None)
+                    model_table.append({
+                        "Model": m_inst.short_label,
+                        "Family": m_inst.family[:14],
+                        "Hit Rate": f"{m_res['hit_rate_pct']:.1f}%" if m_res else "N/A",
+                        "Validation MAPE": f"{m_res['mape_pct']:.2f}%" if m_res else "N/A",
+                        "Target P50": f"${m_res['p50']:,.2f}" if m_res else "N/A",
+                        "Weight": f"{m_res.get('weight_pct', 0.0):.1f}%" if m_res else "0.0%",
+                    })
+                st.dataframe(pd.DataFrame(model_table), use_container_width=True, height=310)
+
+                st.divider()
+                st.markdown("#### 📰 Live Market Intelligence & News Feed")
+                intel_engine = MarketIntelligenceEngine()
+                asset_intel = intel_engine.get_asset_intelligence(active_symbol)
+
+                st.markdown(
+                    f"""
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                        <span>VADER Sentiment Score: <b style="color: {'#34d399' if asset_intel.sentiment_score > 0 else '#fb7185'};">{asset_intel.sentiment_score:+.2f}</b></span>
+                        <span>Catalyst: <b>{asset_intel.catalyst_badge}</b></span>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                if asset_intel.earnings_warning:
+                    st.warning(asset_intel.earnings_warning)
+
+                if asset_intel.headlines:
+                    for h in asset_intel.headlines[:4]:
+                        st.markdown(
+                            f"""
+                            <div style="font-size: 0.78rem; color: #cbd5e1; border-left: 2px solid #38bdf8; padding-left: 8px; margin-bottom: 6px;">
+                                <a href="{h.url}" target="_blank" style="color: #cbd5e1; text-decoration: none;">{h.title}</a>
+                                <div style="font-size: 0.68rem; color: #64748b;">{getattr(h, 'publisher', 'Market Wire')} • {getattr(h, 'published_ago', '')}</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                else:
+                    st.caption("No fresh breaking headlines in the last 24h. Macro sentiment steady.")
+
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # 11. VIEW 3: PORTFOLIOS & LEADERBOARD
+    # ─────────────────────────────────────────────────────────────────────────────
     else:
-        st.caption("Click '⚡ Scan Market' to detect whale order spikes, trends, and momentum.")
+        l_col1, l_col2 = st.columns([1, 1])
+
+        with l_col1:
+            with st.container(border=True):
+                st.markdown("#### 🏆 Multi-Account Leaderboard")
+                st.caption("Compare live performance across Uzair, Waleed, and other accounts.")
+
+                leaderboard = []
+                for p in all_profiles:
+                    p_acct = db.get_or_create_virtual_account(p.profile_id)
+                    p_cash = float(p_acct["virtual_cash_cad"])
+                    p_start = float(p_acct.get("starting_virtual_cad", 10000.0))
+                    p_trades = db.get_virtual_trades(p.profile_id, limit=100)
+                    p_wins = sum(1 for t in p_trades if t.get("prediction_hit", 0))
+                    p_win_rate = (p_wins / len(p_trades) * 100.0) if p_trades else 0.0
+
+                    p_pos = db.get_virtual_positions(p.profile_id)
+                    p_open_val = sum(float(pos["quantity"]) * float(pos["current_price"]) for pos in p_pos)
+                    p_equity = p_cash + p_open_val
+                    p_return_pct = ((p_equity - p_start) / p_start) * 100.0
+
+                    leaderboard.append({
+                        "Trader": p.display_name,
+                        "Equity ($ CAD)": round(p_equity, 2),
+                        "Net Return": f"{p_return_pct:+.2f}%",
+                        "Win Rate": f"{p_win_rate:.0f}%",
+                        "Completed Trades": len(p_trades),
+                        "Open Trades": len(p_pos),
+                    })
+
+                df_lead = pd.DataFrame(leaderboard).sort_values(by="Equity ($ CAD)", ascending=False)
+                st.dataframe(
+                    df_lead.style.format({"Equity ($ CAD)": "${:,.2f}"}),
+                    use_container_width=True,
+                    height=220,
+                )
+
+                st.divider()
+                st.markdown(f"#### 💼 {active_profile.display_name}'s Virtual Trade History")
+                my_trades = db.get_virtual_trades(USER_ID, limit=50)
+                if my_trades:
+                    df_vt = pd.DataFrame(my_trades)
+                    disp_cols = ["ticker", "entry_price", "exit_price", "quantity", "gross_pnl_cad", "ws_fees_cad", "net_pnl_cad", "net_pnl_pct", "closed_at"]
+                    act_cols = [c for c in disp_cols if c in df_vt.columns]
+                    st.dataframe(
+                        df_vt[act_cols].style.format({
+                            "entry_price": "${:,.2f}",
+                            "exit_price": "${:,.2f}",
+                            "net_pnl_cad": "${:+,.2f}",
+                            "net_pnl_pct": "{:+.2f}%",
+                        }),
+                        use_container_width=True,
+                        height=280,
+                    )
+                else:
+                    st.info("No virtual trades completed yet for this profile.")
+
+        with l_col2:
+            with st.container(border=True):
+                st.markdown(f"#### 📲 {active_profile.display_name}'s Real Wealthsimple Executions")
+                st.caption("Active and archived real trades executed on the Wealthsimple app.")
+
+                real_hist = db.get_real_ws_history(USER_ID, limit=50)
+                if real_hist:
+                    df_rh = pd.DataFrame(real_hist)
+                    rh_cols = ["tx_id", "ws_symbol", "route_type", "status", "entry_price", "exit_price", "realized_pnl_cad", "realized_pnl_pct", "opened_at"]
+                    act_rh = [c for c in rh_cols if c in df_rh.columns]
+                    st.dataframe(
+                        df_rh[act_rh].style.format({
+                            "entry_price": "${:,.2f}",
+                            "exit_price": "${:,.2f}",
+                            "realized_pnl_cad": "${:+,.2f}",
+                            "realized_pnl_pct": "{:+.2f}%",
+                        }),
+                        use_container_width=True,
+                        height=450,
+                    )
+                else:
+                    st.info("No real Wealthsimple trades logged yet. Click '📲 Log Real Wealthsimple Fill' on the Workspace ticket.")
 
 
-# ---------------------------------------------------------------------------
-#  Tab 5: System Telemetry & Health
-# ---------------------------------------------------------------------------
-def _render_health_telemetry() -> None:
-    st.markdown("### 💻 System Telemetry & Hardware Diagnostics")
-    try:
-        report = HealthCheck.run_all()
-    except Exception as e:
-        logger.error("Health check error: %s", e, exc_info=True)
-        st.warning(f"Telemetry warning: {e}")
-        report = {
-            "gpu": {"available": False, "device_name": "CPU Fallback", "memory_allocated": "0 MB"},
-            "internet": True,
-            "memory": {"available": "N/A", "total": "N/A"},
-            "models": {"lstm": True, "xgb": True},
-            "cache": {"size": "0 KB"},
-        }
-
-    c1, c2, c3 = st.columns(3)
-
-    with c1:
-        gpu = report.get("gpu", {})
-        st.metric("GPU Device", "NVIDIA RTX 4070" if gpu.get("available") else "CPU", "CUDA 12.4 Enabled")
-        st.caption(f"Device Name: {gpu.get('device_name', 'Unknown')}")
-        st.caption(f"VRAM Allocated: {gpu.get('memory_allocated', '0 MB')}")
-
-    with c2:
-        st.metric("Internet Connectivity", "Connected" if report.get("internet") else "Offline", "Low Latency")
-        mem = report.get("memory", {})
-        st.caption(f"System RAM: {mem.get('available', 'N/A')} available / {mem.get('total', 'N/A')} total")
-
-    with c3:
-        models = report.get("models", {})
-        st.metric("Models Loaded", f"{sum(1 for v in models.values() if v)} / {len(models)}", "Ready")
-        cache = report.get("cache", {})
-        st.caption(f"Data Cache: {cache.get('size', '0 KB')}")
-
-
-# ---------------------------------------------------------------------------
-#  Main Application Execution
-# ---------------------------------------------------------------------------
-def main() -> None:
-    auth = AuthManager()
-
-    # 1. Session Token Validation (F5 Refresh Immunity)
-    session_token = st.query_params.get("session")
-    if "user" not in st.session_state or st.session_state.user is None:
-        if session_token:
-            valid_user = auth.get_user_by_session(session_token)
-            if valid_user:
-                st.session_state.user = valid_user
-            else:
-                st.query_params.clear()
-
-    # 2. If not authenticated, render Login / Register portal and stop
-    if "user" not in st.session_state or st.session_state.user is None:
-        _render_auth_portal(auth)
-        return
-
-    # 3. User is authenticated -> initialize persistent state with user_id
-    _init_state()
-    _render_sidebar()
-
-    # Main Tabs Navigation
-    t1, t2, t3, t4, t5 = st.tabs([
-        "📈 Live Streaming Cockpit",
-        "⚔️ Institutional Strategy Arena",
-        "🧪 Deep Learning Studio",
-        "📡 Market Radar",
-        "🔬 Health & Telemetry",
-    ])
-
-    with t1:
-        _render_live_streaming_fragment()
-
-    with t2:
-        _render_strategy_arena()
-
-    with t3:
-        _render_training_studio()
-
-    with t4:
-        _render_market_radar()
-
-    with t5:
-        _render_health_telemetry()
-
-
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__" or st.runtime.exists():
+    run_app()
