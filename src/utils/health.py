@@ -1,7 +1,6 @@
 """
-System Health Check
-
-Verifies critical system components for the HFP platform.
+TradeSense v7 — System Health Check
+Verifies critical system components, GPU/CUDA acceleration, RAM, CPU, and SQLite database.
 """
 
 import os
@@ -14,7 +13,7 @@ logger = get_logger(__name__)
 
 
 class HealthCheck:
-    """System health diagnostics for the HFP platform."""
+    """System health diagnostics for the TradeSense platform."""
 
     @staticmethod
     def check_gpu() -> Dict[str, Any]:
@@ -26,7 +25,7 @@ class HealthCheck:
             health = {
                 "available": is_avail,
                 "device_count": torch.cuda.device_count() if is_avail else 0,
-                "device_name": torch.cuda.get_device_name(0) if is_avail else "N/A",
+                "device_name": torch.cuda.get_device_name(0) if is_avail else "CPU Only",
                 "total_gb": 0.0,
                 "free_gb": 0.0,
                 "used_gb": 0.0,
@@ -57,33 +56,19 @@ class HealthCheck:
             return {"available": False, "device_count": 0, "device_name": "N/A (torch not installed)", "total_gb": 0.0, "free_gb": 0.0, "used_gb": 0.0, "percent": 0.0}
 
     @staticmethod
-    def check_models(tag: str = "latest") -> Dict[str, bool]:
-        """Check if trained model files exist."""
-        model_dir = config.MODELS_DIR
-        candidate_dirs = [model_dir / tag, model_dir]
-        if model_dir.exists():
-            for child in model_dir.iterdir():
-                if child.is_dir() and child not in candidate_dirs:
-                    candidate_dirs.append(child)
-
-        for target_dir in candidate_dirs:
-            if not target_dir.exists():
-                continue
-            files = {
-                "lstm": target_dir / "lstm_quantile.pt",
-                "xgb_p10": target_dir / "xgb_quantile" / "p10.json",
-                "xgb_p50": target_dir / "xgb_quantile" / "p50.json",
-                "xgb_p90": target_dir / "xgb_quantile" / "p90.json",
-            }
-            results = {name: path.exists() for name, path in files.items()}
-            if any(results.values()):
-                return results
-
-        return {"lstm": False, "xgb_p10": False, "xgb_p50": False, "xgb_p90": False}
+    def check_models() -> Dict[str, bool]:
+        """Check availability of ML/DL libraries."""
+        try:
+            import torch
+            import xgboost
+            import sklearn
+            return {"torch": True, "xgboost": True, "sklearn": True, "ready": True}
+        except ImportError:
+            return {"torch": False, "xgboost": False, "sklearn": False, "ready": False}
 
     @staticmethod
     def check_api_keys() -> Dict[str, bool]:
-        """Check which API keys are configured."""
+        """Check which optional API keys are configured."""
         return {
             "finnhub": config.has_finnhub_key(),
             "reddit": config.has_reddit_credentials(),
@@ -126,10 +111,10 @@ class HealthCheck:
         """Check CPU physical cores, logical threads, and real-time load."""
         try:
             import psutil
-            phys_cores = psutil.cpu_count(logical=False) or 24
-            logical_threads = psutil.cpu_count(logical=True) or 32
+            phys_cores = psutil.cpu_count(logical=False) or 12
+            logical_threads = psutil.cpu_count(logical=True) or 16
             cpu_pct = psutil.cpu_percent(interval=None)
-            freq_ghz = 4.2
+            freq_ghz = 3.5
             try:
                 cfreq = psutil.cpu_freq()
                 if cfreq and cfreq.current:
@@ -146,23 +131,26 @@ class HealthCheck:
             }
         except Exception:
             return {
-                "physical_cores": 24,
-                "logical_threads": 32,
+                "physical_cores": 12,
+                "logical_threads": 16,
                 "percent": 5.0,
-                "frequency_ghz": 4.2,
-                "summary": "32 Threads @ 4.2GHz",
+                "frequency_ghz": 3.5,
+                "summary": "16 Threads @ 3.5GHz",
             }
 
     @staticmethod
-    def check_cache() -> Dict[str, Any]:
-        """Check cache database status."""
-        db_path = config.CACHE_DB_PATH
+    def check_database() -> Dict[str, Any]:
+        """Check TradeSense SQLite database status."""
+        db_path = config.DATA_DIR / "tradesense.db"
         exists = os.path.exists(db_path)
         size = os.path.getsize(db_path) if exists else 0
+        wal_path = str(db_path) + "-wal"
+        has_wal = os.path.exists(wal_path)
         return {
             "exists": exists,
-            "path": db_path,
+            "path": str(db_path),
             "size": f"{size / 1024:.1f} KB" if exists else "0 KB",
+            "wal_mode": has_wal,
         }
 
     @classmethod
@@ -171,24 +159,13 @@ class HealthCheck:
         report = {
             "gpu": cls.check_gpu(),
             "cpu": cls.check_cpu(),
+            "memory": cls.check_memory(),
+            "database": cls.check_database(),
             "models": cls.check_models(),
             "api_keys": cls.check_api_keys(),
             "internet": cls.check_internet(),
-            "memory": cls.check_memory(),
-            "cache": cls.check_cache(),
         }
-        logger.info("Health Check completed: %s", report)
         return report
-
-    @classmethod
-    def summary_emoji(cls) -> str:
-        """Return a one-line emoji health summary for the UI."""
-        report = cls.run_all()
-        gpu = "🟢" if report["gpu"]["available"] else "🔴"
-        net = "🟢" if report["internet"] else "🔴"
-        models_ready = all(report["models"].values())
-        mdl = "🟢" if models_ready else "🟡"
-        return f"GPU {gpu}  Net {net}  Models {mdl}"
 
 
 # Singleton

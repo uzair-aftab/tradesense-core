@@ -137,10 +137,16 @@ coverage.xml
 .hypothesis/
 
 # -----------------
-# TradeSense v6 Additions
+# TradeSense v6/v7 Additions
 # -----------------
 scratch/
 tools/cloudflared*
+bin/
+data/bot_sessions/
+data/public_url.txt
+data/gist_payload.json
+data/.session_secret
+data/*.png
 *.db-wal
 *.db-shm
 models/zoo/

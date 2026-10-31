@@ -223,6 +223,7 @@ class DatabaseManager:
                     model_preset TEXT DEFAULT 'AUTO_DNA',
                     selected_models_json TEXT DEFAULT '[]',
                     blending_mode TEXT DEFAULT 'WALK_FORWARD',
+                    use_proxy_route INTEGER DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     last_active_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
@@ -260,6 +261,11 @@ class DatabaseManager:
                 CREATE INDEX IF NOT EXISTS idx_user_positions_lookup ON user_positions(user_id, ticker);
                 """
             )
+        with self.get_connection() as conn:
+            try:
+                conn.execute("ALTER TABLE user_profiles ADD COLUMN use_proxy_route INTEGER DEFAULT 1;")
+            except Exception:
+                pass
         logger.info("Database initialized successfully at %s", self.db_path)
 
     # ══════════════════════════════════════════════════════════════════════
@@ -841,6 +847,32 @@ class DatabaseManager:
                 ),
             )
 
+    def save_virtual_trade(self, trade_data_or_user_id, *args, **kwargs) -> None:
+        """Compatibility wrapper accepting dict or kwargs."""
+        if isinstance(trade_data_or_user_id, dict):
+            d = trade_data_or_user_id
+            self.record_virtual_trade(
+                user_id=d.get("user_id"),
+                ticker=d.get("ticker"),
+                ws_symbol=d.get("ws_symbol", d.get("ticker")),
+                entry_price=float(d.get("entry_price", 0.0)),
+                exit_price=float(d.get("exit_price", 0.0)),
+                predicted_p50=float(d.get("predicted_p50", 0.0)),
+                quantity=float(d.get("quantity", 0.0)),
+                gross_pnl_cad=float(d.get("gross_pnl_cad", 0.0)),
+                ws_fees_cad=float(d.get("ws_fees_cad", 0.0)),
+                net_pnl_cad=float(d.get("net_pnl_cad", 0.0)),
+                net_pnl_pct=float(d.get("net_pnl_pct", 0.0)),
+                prediction_hit=bool(d.get("prediction_hit", False)),
+                exit_reason=str(d.get("exit_reason", "")),
+                mode=str(d.get("mode", "LIVE_VIRTUAL")),
+                opened_at=d.get("opened_at"),
+            )
+        else:
+            self.record_virtual_trade(trade_data_or_user_id, *args, **kwargs)
+
+    get_virtual_trade_history = lambda self, user_id, limit=100: self.get_virtual_trades(user_id, limit)
+
     def get_virtual_trades(self, user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         """Retrieve historical virtual trades."""
         with self.get_connection() as conn:
@@ -888,8 +920,8 @@ class DatabaseManager:
                     profile_id, display_name, avatar_initials, accent_color,
                     ws_tier, usd_account_active, active_symbol, active_timeframe,
                     horizon_bars, model_preset, selected_models_json, blending_mode,
-                    last_active_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    use_proxy_route, last_active_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(profile_id) DO UPDATE SET
                     display_name = excluded.display_name,
                     avatar_initials = excluded.avatar_initials,
@@ -902,6 +934,7 @@ class DatabaseManager:
                     model_preset = excluded.model_preset,
                     selected_models_json = excluded.selected_models_json,
                     blending_mode = excluded.blending_mode,
+                    use_proxy_route = excluded.use_proxy_route,
                     last_active_at = CURRENT_TIMESTAMP
                 """,
                 (
@@ -917,6 +950,7 @@ class DatabaseManager:
                     data.get("model_preset", "AUTO_DNA"),
                     data.get("selected_models_json", "[]"),
                     data.get("blending_mode", "WALK_FORWARD"),
+                    1 if data.get("use_proxy_route", 1) else 0,
                 ),
             )
 

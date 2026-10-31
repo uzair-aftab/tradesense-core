@@ -2,8 +2,8 @@
 TradeSense Passwordless Multi-Account Profile Engine
 ====================================================
 Manages friendly, passwordless trading profiles (Uzair, Waleed, and on-demand added accounts):
-  - 1-Click Profile Cards on glass login screen
-  - Seamless URL session parameter persistence (?user=uzair, ?user=waleed)
+  - 1-Click Profile Cards on login screen
+  - Cookie-based session token persistence (zero ?user= query param clutter)
   - Isolated SQLite WAL portfolios, virtual ledgers, and real Wealthsimple logs
 """
 
@@ -44,10 +44,12 @@ class UserProfile:
     model_preset: str = "AUTO_DNA"
     selected_models: List[str] = field(default_factory=list)
     blending_mode: str = "WALK_FORWARD"
+    use_proxy_route: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
         d["selected_models_json"] = json.dumps(self.selected_models)
+        d["use_proxy_route"] = 1 if self.use_proxy_route else 0
         return d
 
     @classmethod
@@ -72,6 +74,7 @@ class UserProfile:
             model_preset=row.get("model_preset", "AUTO_DNA"),
             selected_models=models,
             blending_mode=row.get("blending_mode", "WALK_FORWARD"),
+            use_proxy_route=bool(row.get("use_proxy_route", 1)),
         )
 
 
@@ -103,6 +106,7 @@ class ProfileManager:
                     "model_preset": "AUTO_DNA",
                     "selected_models_json": "[]",
                     "blending_mode": "WALK_FORWARD",
+                    "use_proxy_route": 1,
                 })
                 # Ensure isolated virtual trading wallet
                 self.db.get_or_create_virtual_account(pid, starting_cash=10000.0, ws_tier=tier)
@@ -119,6 +123,11 @@ class ProfileManager:
             return None
         row = self.db.get_user_profile(str(profile_id).lower())
         return UserProfile.from_row(row) if row else None
+
+    def save_profile(self, profile: UserProfile) -> UserProfile:
+        """Persist a UserProfile instance directly."""
+        self.db.save_user_profile(profile.to_dict())
+        return profile
 
     def create_profile(
         self,
@@ -165,6 +174,7 @@ class ProfileManager:
             model_preset="AUTO_DNA",
             selected_models=[],
             blending_mode="WALK_FORWARD",
+            use_proxy_route=True,
         )
 
         self.db.save_user_profile(profile.to_dict())
@@ -179,7 +189,12 @@ class ProfileManager:
             return None
         d = curr.to_dict()
         for k, v in kwargs.items():
-            if k in d:
+            if k == "selected_models":
+                d["selected_models_json"] = json.dumps(v if isinstance(v, list) else [])
+                d["selected_models"] = v
+            elif k == "use_proxy_route":
+                d["use_proxy_route"] = 1 if v else 0
+            elif k in d:
                 d[k] = v
         self.db.save_user_profile(d)
         return self.get_profile(profile_id)

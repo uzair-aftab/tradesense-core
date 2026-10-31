@@ -1,21 +1,22 @@
 """
-HFP Models — Hybrid Ensemble Prediction Engine & Trading Simulator
-
-Modules:
-    ai_engine   – Stacking ensemble (LSTM + XGBoost) with quantile output
-    trader      – "The Gauntlet" event-driven paper trading simulator
+TradeSense v7 — Quantitative Models, Profit Engine & Autonomous Virtual Bot
+===========================================================================
 """
 
-from src.models.ai_engine import AIEngine, QuantilePrediction, TrainResult
-from src.models.trader import Gauntlet, TradeOrder, Side, Fill, PortfolioMetrics
+from src.models.model_zoo import (
+    BaseQuantModel,
+    ModelZooEngine,
+    build_ml_feature_matrix,
+    create_model,
+    ALL_MODEL_IDS,
+    MODEL_PRESETS,
+)
 
 __all__ = [
-    "AIEngine",
-    "QuantilePrediction",
-    "TrainResult",
-    "Gauntlet",
-    "TradeOrder",
-    "Side",
-    "Fill",
-    "PortfolioMetrics",
+    "BaseQuantModel",
+    "ModelZooEngine",
+    "build_ml_feature_matrix",
+    "create_model",
+    "ALL_MODEL_IDS",
+    "MODEL_PRESETS",
 ]

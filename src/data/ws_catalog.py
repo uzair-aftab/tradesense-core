@@ -33,6 +33,19 @@ class WealthsimpleAsset:
     fractional_supported: bool  # True on Wealthsimple for major TSX/US/CDR/Crypto
     alt_cad_proxy: Optional[str] = None  # e.g., "NVDA.NE" for "NVDA", "BTCC.TO" for "BTC-CAD", "VFV.TO" for "SPY"
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "symbol": self.symbol,
+            "ws_display_symbol": self.ws_display_symbol,
+            "name": self.name,
+            "category": self.category,
+            "currency": self.currency,
+            "exchange": self.exchange,
+            "is_24_7": self.is_24_7,
+            "fractional_supported": self.fractional_supported,
+            "alt_cad_proxy": self.alt_cad_proxy,
+        }
+
 
 @dataclass
 class FeeEstimate:
@@ -43,6 +56,22 @@ class FeeEstimate:
     fee_cad_on_notional: float    # Dollar fee on given CAD notional (round-trip)
     badge_text: str               # Short UI badge (e.g., "$0 Comm • ~0.08% Spread")
     optimization_tip: Optional[str] = None  # Actionable fee saving suggestion
+
+    @property
+    def round_trip_fee_cad(self) -> float:
+        """Alias for round-trip dollar fee on calculated notional."""
+        return self.fee_cad_on_notional
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "one_way_fee_pct": self.one_way_fee_pct,
+            "one_way_slippage_pct": self.one_way_slippage_pct,
+            "round_trip_total_pct": self.round_trip_total_pct,
+            "fee_cad_on_notional": self.fee_cad_on_notional,
+            "round_trip_fee_cad": self.round_trip_fee_cad,
+            "badge_text": self.badge_text,
+            "optimization_tip": self.optimization_tip,
+        }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -263,6 +292,17 @@ class WealthsimpleCatalog:
             return hit
 
         sym = symbol.strip().upper()
+        # Canonical Crypto Aliases (resolve BTC-USD/ETH-USD to Wealthsimple CAD pairs with TSX proxies)
+        if sym in ("BTC", "BTC-USD", "BTC/USD"):
+            if "BTC-CAD" in CURATED_WS_ASSETS:
+                return CURATED_WS_ASSETS["BTC-CAD"]
+        if sym in ("ETH", "ETH-USD", "ETH/USD"):
+            if "ETH-CAD" in CURATED_WS_ASSETS:
+                return CURATED_WS_ASSETS["ETH-CAD"]
+        if sym in ("SOL", "SOL-USD", "SOL/USD"):
+            if "SOL-CAD" in CURATED_WS_ASSETS:
+                return CURATED_WS_ASSETS["SOL-CAD"]
+
         if sym.endswith(".TO") or sym.endswith(".V"):
             cat = "TSX_STOCK"
             curr = "CAD"
@@ -296,6 +336,18 @@ class WealthsimpleCatalog:
             fractional_supported=True,
             alt_cad_proxy=None,
         )
+
+    @classmethod
+    def get_execution_route(cls, symbol: str, use_proxy: bool = True) -> tuple[WealthsimpleAsset, WealthsimpleAsset, bool]:
+        """
+        Resolves the primary asset and execution asset given user's proxy toggle.
+        Returns: (primary_asset, execution_asset, is_proxied)
+        """
+        primary = cls.resolve_asset(symbol)
+        if use_proxy and primary.alt_cad_proxy:
+            proxy_asset = cls.resolve_asset(primary.alt_cad_proxy)
+            return primary, proxy_asset, True
+        return primary, primary, False
 
     @classmethod
     def list_curated(cls, category: Optional[str] = None) -> List[WealthsimpleAsset]:

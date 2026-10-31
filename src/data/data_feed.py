@@ -100,7 +100,7 @@ class DataLake:
         Number of retries on fetch failure (exponential backoff).
     """
 
-    sentiment_backend: Literal["finbert", "vader"] = "finbert"
+    sentiment_backend: Literal["finbert", "vader"] = "vader"
     whale_z_threshold: float = WHALE_Z_THRESHOLD
     scaler: Optional[MinMaxScaler] = None
     use_cache: bool = True
@@ -236,7 +236,7 @@ class DataLake:
         df: pd.DataFrame,
         *,
         ticker: Optional[str] = None,
-        include_sentiment: bool = True,
+        include_sentiment: bool = False,
     ) -> pd.DataFrame:
         """
         Compute the full HFP feature set and append columns in-place.
@@ -357,7 +357,7 @@ class DataLake:
         lookback: str = "6mo",
         *,
         include_sentiment: bool = True,
-        normalise: bool = True,
+        normalise: bool = False,
     ) -> pd.DataFrame:
         """
         End-to-end: fetch → engineer → normalise.
@@ -686,6 +686,10 @@ class DataLake:
     # ── FinBERT scoring ────────────────────────────────────────────────
 
     def _score_finbert(self, headlines: List[str]) -> float:
+        """Deterministic financial sentiment scoring (routed to VADER + Financial Lexicon)."""
+        return self._score_vader(headlines)
+
+    def _score_finbert_legacy(self, headlines: List[str]) -> float:
         """
         Score headlines with ProsusAI/finbert on GPU (if available).
 

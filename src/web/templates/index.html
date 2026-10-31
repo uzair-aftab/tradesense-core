@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TradeSense — Wealthsimple AI Alpha &amp; Execution Terminal</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- TradingView Lightweight Charts v4 -->
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <link rel="icon" type="image/svg+xml" href="/static/img/favicon.svg">
+  <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body class="bg-slate-950 text-slate-200 min-h-screen antialiased flex flex-col justify-between">
+
+  <!-- Top Bar -->
+  <header class="border-b border-slate-800/80 bg-slate-950/90 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-[1720px] mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-4">
+      
+      <!-- Left: Brand + Market Clock -->
+      <div class="flex items-center gap-3 shrink-0">
+        <a href="/" class="flex items-center gap-2.5 group">
+          <div class="h-8 w-8 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center shadow-sm group-hover:border-sky-500/60 transition">
+            <img src="/static/img/favicon.svg" alt="TradeSense" class="w-5 h-5">
+          </div>
+          <span class="text-sm font-bold text-white tracking-tight">TradeSense</span>
+        </a>
+        <div id="header-market-clock" class="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-900 border border-slate-800 text-[11px] text-slate-400">
+          <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+          <span id="market-clock-text">Toronto Market Clock</span>
+        </div>
+      </div>
+
+      <!-- Center-Left: Asset Search Combobox + Timeframe Pills -->
+      <div class="flex items-center gap-3 flex-1 max-w-xl">
+        <div class="relative flex-1">
+          <div class="flex items-center px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 focus-within:border-sky-500 transition">
+            <svg class="w-4 h-4 text-slate-500 mr-2 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+            <input
+              type="text"
+              id="asset-search-input"
+              placeholder="Search TSX, US, CDR, Crypto (e.g. SHOP, BTC, NVDA)..."
+              class="w-full bg-transparent text-xs text-white placeholder-slate-500 focus:outline-none uppercase font-mono"
+              autocomplete="off"
+            >
+            <span id="active-asset-category" class="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 shrink-0">
+              CRYPTO
+            </span>
+          </div>
+          <!-- Dropdown Results -->
+          <div id="asset-search-dropdown" class="hidden absolute left-0 right-0 top-full mt-1 max-h-80 overflow-y-auto rounded-lg bg-slate-900 border border-slate-800 shadow-2xl z-50 text-xs">
+            <!-- Dynamically populated -->
+          </div>
+        </div>
+
+        <div class="flex items-center p-0.5 rounded-lg bg-slate-900 border border-slate-800 shrink-0">
+          <button type="button" class="pill-btn timeframe-btn" data-tf="15m">15m</button>
+          <button type="button" class="pill-btn timeframe-btn active" data-tf="1h">1h</button>
+          <button type="button" class="pill-btn timeframe-btn" data-tf="1d">1D</button>
+        </div>
+      </div>
+
+      <!-- Right: User Badge, Refresh, Switch Account -->
+      <div class="flex items-center gap-2.5 shrink-0">
+        <button
+          type="button"
+          onclick="refreshCurrentWorkspace()"
+          id="btn-refresh-all"
+          class="p-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition"
+          title="Refresh Data &amp; Forecast"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        </button>
+
+        <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs">
+          <div id="user-badge-initials" class="w-5 h-5 rounded-full flex items-center justify-center font-bold text-[10px] text-slate-950 bg-sky-400">
+            UZ
+          </div>
+          <span id="user-badge-name" class="font-semibold text-white">Uzair</span>
+          <span class="text-slate-600">·</span>
+          <span id="user-badge-equity" class="font-mono text-slate-300 font-bold">$10,000.00 CAD</span>
+        </div>
+
+        <button
+          type="button"
+          onclick="logoutSession()"
+          class="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-rose-400 text-xs font-medium transition"
+          title="Switch Profile / Sign Out"
+        >
+          Switch
+        </button>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- 3 Navigation Tabs (pr-plan style) -->
+  <div class="border-b border-slate-800/80 bg-slate-950/60">
+    <div class="max-w-[1720px] mx-auto px-4 sm:px-6 flex items-center gap-1">
+      <button type="button" class="tab-btn active" data-tab="terminal">
+        1. Terminal &amp; Execution
+      </button>
+      <button type="button" class="tab-btn" data-tab="model-lab">
+        2. Model Lab &amp; Alpha Scanner
+      </button>
+      <button type="button" class="tab-btn" data-tab="portfolios">
+        3. Portfolios &amp; Leaderboard
+      </button>
+    </div>
+  </div>
+
+  <!-- Main View Container -->
+  <main class="flex-1 max-w-[1720px] w-full mx-auto p-4 sm:p-6 space-y-6">
+
+    <!-- ═════════════════════════════════════════════════════════════════════ -->
+    <!-- TAB 1: TERMINAL & EXECUTION                                          -->
+    <!-- ═════════════════════════════════════════════════════════════════════ -->
+    <div id="tab-terminal" class="tab-pane space-y-5">
+      
+      <!-- Top 4-Stat Strip -->
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        
+        <!-- Stat 1: Live Price -->
+        <div class="card p-4">
+          <div class="stat-label">Live Price · <span id="stat-symbol">BTC-CAD</span></div>
+          <div class="stat-value text-white" id="stat-price">$108,183.89 CAD</div>
+          <div class="stat-sub flex items-center gap-2">
+            <span id="stat-change" class="font-mono font-semibold text-emerald-400">+0.59%</span>
+            <span class="text-slate-600">·</span>
+            <span id="stat-market-session" class="text-slate-400 text-[11px]">Crypto 24/7 Open</span>
+          </div>
+        </div>
+
+        <!-- Stat 2: Quant Zoo Consensus -->
+        <div class="card p-4">
+          <div class="stat-label">Quant Zoo Consensus (<span id="stat-horizon">5B</span>)</div>
+          <div class="stat-value" id="stat-consensus-dir">
+            <span class="text-emerald-400">BULLISH</span>
+          </div>
+          <div class="stat-sub font-mono">
+            Target: <span id="stat-consensus-p50" class="text-slate-200 font-bold">$111,200</span>
+            <span class="text-slate-500 text-[11px] block">Range: <span id="stat-consensus-p10">$106,400</span> – <span id="stat-consensus-p90">$114,800</span></span>
+          </div>
+        </div>
+
+        <!-- Stat 3: Proof-of-Edge -->
+        <div class="card p-4">
+          <div class="stat-label">Pair Proof-of-Edge (60B)</div>
+          <div class="stat-value text-sm flex items-center gap-2 mt-1" id="stat-edge-badge">
+            <span class="px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800 text-xs font-bold">
+              🟢 Proven Edge
+            </span>
+          </div>
+          <div class="stat-sub text-[11px]" id="stat-edge-details">
+            <span class="font-mono text-emerald-400 font-bold" id="stat-edge-winrate">66.7% Win</span> · 
+            PF <span class="font-mono text-slate-200" id="stat-edge-pf">2.41</span> · 
+            Net <span class="font-mono text-emerald-400" id="stat-edge-net">+4.8%</span> after WS fees
+          </div>
+        </div>
+
+        <!-- Stat 4: Virtual Bot Equity -->
+        <div class="card p-4 flex items-center justify-between">
+          <div>
+            <div class="stat-label">Virtual Equity · <span id="stat-user-name">Uzair</span></div>
+            <div class="stat-value text-white" id="stat-equity-cad">$10,000.00</div>
+            <div class="stat-sub text-[11px]">
+              Cash: <span class="font-mono text-slate-300" id="stat-cash-cad">$10,000.00</span> · 
+              <span id="stat-bot-active-badge" class="text-sky-400 font-semibold">Armed ●</span>
+            </div>
+          </div>
+          <div class="text-right">
+            <button
+              type="button"
+              onclick="toggleBotArmed()"
+              id="btn-toggle-bot-armed"
+              class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition shadow-sm"
+            >
+              Armed ●
+            </button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Main 12-Column Grid -->
+      <div class="grid lg:grid-cols-12 gap-5 items-start">
+        
+        <!-- Left 8 Columns: TradingView Lightweight Chart & Ensemble Controls -->
+        <div class="lg:col-span-8 space-y-4">
+          
+          <div class="card p-4 space-y-3">
+            
+            <!-- Chart Toolbar (0ms client-side controls) -->
+            <div class="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800/80 text-xs">
+              
+              <!-- Left: Zoom & History Windows -->
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <span class="text-slate-500 font-medium text-[11px] mr-1">Zoom:</span>
+                <button type="button" class="pill-btn px-2 font-bold" onclick="chartZoomIn()" title="Zoom In">+</button>
+                <button type="button" class="pill-btn px-2 font-bold" onclick="chartZoomOut()" title="Zoom Out">−</button>
+                <button type="button" class="pill-btn" onclick="chartResetZoom()" title="Reset Zoom">Reset</button>
+
+                <div class="h-4 w-px bg-slate-800 mx-1"></div>
+
+                <span class="text-slate-500 font-medium text-[11px] mr-1">Bars:</span>
+                <button type="button" class="pill-btn window-btn" data-bars="30">30B</button>
+                <button type="button" class="pill-btn window-btn" data-bars="60">60B</button>
+                <button type="button" class="pill-btn window-btn active" data-bars="120">120B</button>
+                <button type="button" class="pill-btn window-btn" data-bars="all">All</button>
+              </div>
+
+              <!-- Center-Right: Forecast Horizon & Chart Style -->
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <span class="text-slate-500 font-medium text-[11px] mr-1">Horizon:</span>
+                <button type="button" class="pill-btn horizon-btn" data-horizon="3">3B</button>
+                <button type="button" class="pill-btn horizon-btn active" data-horizon="5">5B</button>
+                <button type="button" class="pill-btn horizon-btn" data-horizon="10">10B</button>
+                <button type="button" class="pill-btn horizon-btn" data-horizon="20">20B</button>
+
+                <div class="h-4 w-px bg-slate-800 mx-1"></div>
+
+                <select id="chart-style-select" onchange="changeChartStyle(this.value)" class="bg-slate-900 border border-slate-800 rounded px-2 py-1 text-[11px] text-slate-300 focus:outline-none">
+                  <option value="candles">Candles</option>
+                  <option value="heikin_ashi">Heikin-Ashi</option>
+                  <option value="line">Line</option>
+                </select>
+              </div>
+
+            </div>
+
+            <!-- Overlay Toggles (0ms instant toggles) -->
+            <div class="flex items-center gap-2 flex-wrap text-[11px] text-slate-400">
+              <span class="text-slate-500 font-medium">Overlays:</span>
+              <label class="flex items-center gap-1 cursor-pointer hover:text-white">
+                <input type="checkbox" id="toggle-ema" checked onchange="toggleOverlay('ema', this.checked)" class="rounded bg-slate-900 border-slate-700 text-sky-500 focus:ring-0">
+                <span>EMA 9/21</span>
+              </label>
+              <label class="flex items-center gap-1 cursor-pointer hover:text-white">
+                <input type="checkbox" id="toggle-vwap" checked onchange="toggleOverlay('vwap', this.checked)" class="rounded bg-slate-900 border-slate-700 text-sky-500 focus:ring-0">
+                <span>VWAP</span>
+              </label>
+              <label class="flex items-center gap-1 cursor-pointer hover:text-white">
+                <input type="checkbox" id="toggle-bb" onchange="toggleOverlay('bb', this.checked)" class="rounded bg-slate-900 border-slate-700 text-sky-500 focus:ring-0">
+                <span>Bollinger</span>
+              </label>
+              <label class="flex items-center gap-1 cursor-pointer hover:text-white">
+                <input type="checkbox" id="toggle-sr" checked onchange="toggleOverlay('sr', this.checked)" class="rounded bg-slate-900 border-slate-700 text-sky-500 focus:ring-0">
+                <span>S/R Levels</span>
+              </label>
+              <label class="flex items-center gap-1 cursor-pointer hover:text-white">
+                <input type="checkbox" id="toggle-cone" checked onchange="toggleOverlay('cone', this.checked)" class="rounded bg-slate-900 border-slate-700 text-sky-500 focus:ring-0">
+                <span>Forecast Cone</span>
+              </label>
+              <label class="flex items-center gap-1 cursor-pointer hover:text-white">
+                <input type="checkbox" id="toggle-orders" checked onchange="toggleOverlay('orders', this.checked)" class="rounded bg-slate-900 border-slate-700 text-sky-500 focus:ring-0">
+                <span>Order Lines</span>
+              </label>
+            </div>
+
+            <!-- Crosshair OHLCV Readout -->
+            <div id="chart-legend" class="h-5 flex items-center gap-3 text-[11px] font-mono text-slate-400">
+              <span>O: <strong id="legend-o" class="text-slate-200">—</strong></span>
+              <span>H: <strong id="legend-h" class="text-slate-200">—</strong></span>
+              <span>L: <strong id="legend-l" class="text-slate-200">—</strong></span>
+              <span>C: <strong id="legend-c" class="text-slate-200">—</strong></span>
+              <span>Vol: <strong id="legend-v" class="text-slate-200">—</strong></span>
+            </div>
+
+            <!-- TradingView Chart Container -->
+            <div id="chart-container" class="w-full h-[440px] rounded-lg overflow-hidden bg-slate-950 border border-slate-900 relative">
+              <!-- Lightweight charts mounts here -->
+            </div>
+
+          </div>
+
+          <!-- Active Ensemble & Feature Driver Strip -->
+          <div class="card p-4 space-y-3">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex items-center gap-1.5 flex-wrap text-xs">
+                <span class="text-slate-500 font-semibold uppercase text-[10px] mr-1">Preset:</span>
+                <button type="button" class="pill-btn preset-btn active" data-preset="AUTO_DNA">Auto-DNA</button>
+                <button type="button" class="pill-btn preset-btn" data-preset="PURE_DL">Pure DL</button>
+                <button type="button" class="pill-btn preset-btn" data-preset="TREE_ML">Tree ML</button>
+                <button type="button" class="pill-btn preset-btn" data-preset="FULL_SUPER">All 8 Models</button>
+                <button type="button" class="pill-btn preset-btn" data-preset="CUSTOM">Custom</button>
+              </div>
+
+              <div class="flex items-center gap-2 text-xs">
+                <span class="text-slate-500 text-[10px] uppercase font-semibold">Synthesis:</span>
+                <select id="blending-select" onchange="changeBlendingMode(this.value)" class="bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs text-slate-300 focus:outline-none">
+                  <option value="WALK_FORWARD">Walk-Forward Softmax</option>
+                  <option value="RIDGE_STACK">Ridge Meta-Stack</option>
+                  <option value="EQUAL">Equal Weights</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Active Model Weight Chips -->
+            <div class="pt-2 border-t border-slate-800/60">
+              <div class="text-[10px] uppercase font-semibold text-slate-500 mb-1.5 flex items-center justify-between">
+                <span>Active Model Weight Allocation</span>
+                <span id="conformal-coverage-pill" class="text-sky-400 font-mono">Conformal Range: ±1.8%</span>
+              </div>
+              <div id="ensemble-weights-bar" class="flex items-center gap-2 flex-wrap text-xs">
+                <!-- Dynamically populated chips -->
+              </div>
+            </div>
+
+            <!-- Top 4 Feature Drivers -->
+            <div class="pt-2 border-t border-slate-800/60">
+              <div class="text-[10px] uppercase font-semibold text-slate-500 mb-1.5">
+                Top Signal Drivers (Causal Attribution)
+              </div>
+              <div id="feature-drivers-bar" class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                <!-- Dynamically populated -->
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Right 4 Columns: Virtual Bot & Wealthsimple Order Ticket -->
+        <div class="lg:col-span-4 space-y-4">
+          
+          <!-- Card 1: Virtual Bot & Paper Proof -->
+          <div class="card p-4 space-y-3">
+            <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+              <div class="flex items-center gap-2">
+                <div class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></div>
+                <span class="font-bold text-xs text-white uppercase tracking-wider">Virtual Bot Execution</span>
+              </div>
+              <span id="bot-heartbeat-text" class="text-[10px] font-mono text-slate-400">Heartbeat: 60s active</span>
+            </div>
+
+            <!-- Open Position Display OR Paper Buy Button -->
+            <div id="virtual-position-box" class="p-3 rounded-lg bg-slate-950 border border-slate-800 space-y-2 text-xs">
+              <!-- Dynamically populated: either active position details or Flat state -->
+            </div>
+
+            <!-- 4-Stat Walk-Forward Mini Grid -->
+            <div class="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800/60 text-xs font-mono">
+              <div class="p-2 rounded bg-slate-950/60 border border-slate-800/80">
+                <span class="text-slate-500 text-[10px] uppercase block">Walk-Forward Trades</span>
+                <span id="mini-wf-trades" class="font-bold text-slate-200">6 Trades</span>
+              </div>
+              <div class="p-2 rounded bg-slate-950/60 border border-slate-800/80">
+                <span class="text-slate-500 text-[10px] uppercase block">Win Rate</span>
+                <span id="mini-wf-winrate" class="font-bold text-emerald-400">66.7%</span>
+              </div>
+              <div class="p-2 rounded bg-slate-950/60 border border-slate-800/80">
+                <span class="text-slate-500 text-[10px] uppercase block">Profit Factor</span>
+                <span id="mini-wf-pf" class="font-bold text-slate-200">2.41</span>
+              </div>
+              <div class="p-2 rounded bg-slate-950/60 border border-slate-800/80">
+                <span class="text-slate-500 text-[10px] uppercase block">WS Fees Deducted</span>
+                <span id="mini-wf-fees" class="font-bold text-rose-400">$3.80 CAD</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 2: Wealthsimple Order Ticket & 1-Click Clipboard -->
+          <div class="card p-4 space-y-3.5">
+            <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+              <span class="font-bold text-xs text-white uppercase tracking-wider">Wealthsimple Order Ticket</span>
+              <span id="ticket-ws-tier-badge" class="text-[10px] font-semibold px-2 py-0.5 rounded bg-sky-950 text-sky-300 border border-sky-800">
+                Core Tier ($0 Comm)
+              </span>
+            </div>
+
+            <!-- Optimal CAD Proxy Switch -->
+            <div id="proxy-route-banner" class="p-2.5 rounded-lg bg-sky-950/40 border border-sky-800/80 flex items-center justify-between text-xs">
+              <div>
+                <div class="font-semibold text-sky-200 flex items-center gap-1.5">
+                  <span id="proxy-switch-label">Route via BTCC.TO</span>
+                  <span class="text-[10px] px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">TFSA 0% Tax</span>
+                </div>
+                <div id="proxy-savings-text" class="text-[11px] text-sky-400/80 mt-0.5">
+                  Saves ~$20.10 CAD round-trip fees vs raw crypto
+                </div>
+              </div>
+              <label class="relative inline-flex items-center cursor-pointer shrink-0 ml-2">
+                <input type="checkbox" id="proxy-route-checkbox" checked onchange="toggleProxyRoute(this.checked)" class="sr-only peer">
+                <div class="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-500"></div>
+              </label>
+            </div>
+
+            <!-- Capital Allocation + Quarter-Kelly -->
+            <div class="space-y-1.5">
+              <div class="flex items-center justify-between text-xs text-slate-400">
+                <span>Capital Allocation ($ CAD)</span>
+                <button
+                  type="button"
+                  onclick="applyQuarterKelly()"
+                  class="text-sky-400 hover:text-sky-300 text-[11px] font-semibold"
+                >
+                  Apply Quarter-Kelly (<span id="kelly-calc-text">$1,038</span>)
+                </button>
+              </div>
+              <div class="flex items-center gap-2">
+                <input
+                  type="number"
+                  id="ticket-capital-cad"
+                  value="500"
+                  step="50"
+                  onchange="recalculateTicket()"
+                  class="flex-1 px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-white font-mono font-bold focus:outline-none focus:border-sky-500"
+                >
+                <div class="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 font-mono text-xs text-slate-300 shrink-0">
+                  <span id="ticket-shares-count">24.39</span> <span id="ticket-exec-unit">Units</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 1-Click Clipboard Copy Fields -->
+            <div class="space-y-2 pt-1 text-xs">
+              
+              <div>
+                <span class="text-slate-500 block text-[10px] uppercase font-semibold mb-1">Limit Entry Price</span>
+                <div class="copy-box" onclick="copyToClipboard(document.getElementById('copy-entry-price').innerText, 'Limit Entry')">
+                  <span class="font-mono font-bold text-white text-sm" id="copy-entry-price">$20.50</span>
+                  <span class="text-slate-500 text-[11px] flex items-center gap-1 group-hover:text-sky-400">
+                    <span>Copy</span>
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                  </span>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-2 gap-2">
+                <div>
+                  <span class="text-slate-500 block text-[10px] uppercase font-semibold mb-1">Take Profit (P90)</span>
+                  <div class="copy-box" onclick="copyToClipboard(document.getElementById('copy-tp-price').innerText, 'Take Profit')">
+                    <span class="font-mono font-bold text-emerald-400" id="copy-tp-price">$21.32</span>
+                    <svg class="w-3 h-3 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                  </div>
+                </div>
+
+                <div>
+                  <span class="text-slate-500 block text-[10px] uppercase font-semibold mb-1">Stop Loss (P10)</span>
+                  <div class="copy-box" onclick="copyToClipboard(document.getElementById('copy-sl-price').innerText, 'Stop Loss')">
+                    <span class="font-mono font-bold text-rose-400" id="copy-sl-price">$19.98</span>
+                    <svg class="w-3 h-3 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            <!-- Action Buttons: Paper Buy & Real Wealthsimple Fill -->
+            <div class="grid grid-cols-2 gap-2 pt-2">
+              <button
+                type="button"
+                onclick="submitPaperBuy()"
+                class="w-full py-2.5 px-3 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs transition flex items-center justify-center gap-1.5 shadow-sm"
+              >
+                <span>Paper Buy ($<span id="btn-paper-alloc">500</span>)</span>
+              </button>
+              <button
+                type="button"
+                onclick="openLogRealTradeModal()"
+                class="w-full py-2.5 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs transition flex items-center justify-center gap-1.5"
+              >
+                <span>Log Real WS Fill</span>
+              </button>
+            </div>
+
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- ═════════════════════════════════════════════════════════════════════ -->
+    <!-- TAB 2: MODEL LAB & ALPHA SCANNER                                     -->
+    <!-- ═════════════════════════════════════════════════════════════════════ -->
+    <div id="tab-model-lab" class="tab-pane hidden space-y-6">
+      
+      <div class="grid lg:grid-cols-12 gap-6 items-start">
+        
+        <!-- Left 6 Columns: Multi-Pair Net-EV Alpha Scanner -->
+        <div class="lg:col-span-6 space-y-4">
+          <div class="card p-4 space-y-3">
+            <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+              <div>
+                <span class="font-bold text-xs text-white uppercase tracking-wider block">Multi-Pair Net-EV Alpha Scanner</span>
+                <span class="text-[11px] text-slate-400">Ranks universe after exact Wealthsimple fees &amp; optimal proxy routing</span>
+              </div>
+              <button
+                type="button"
+                onclick="runAlphaScanner(true)"
+                class="px-3 py-1 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold transition"
+              >
+                Scan Universe
+              </button>
+            </div>
+
+            <!-- Scanner Category Filters -->
+            <div class="flex items-center gap-1.5 flex-wrap text-xs">
+              <button type="button" class="pill-btn scan-filter-btn active" data-cat="ALL">All (16)</button>
+              <button type="button" class="pill-btn scan-filter-btn" data-cat="CRYPTO">Crypto</button>
+              <button type="button" class="pill-btn scan-filter-btn" data-cat="TSX_STOCK">TSX Stocks</button>
+              <button type="button" class="pill-btn scan-filter-btn" data-cat="NEO_CDR">NEO CDRs</button>
+              <button type="button" class="pill-btn scan-filter-btn" data-cat="CANADIAN_ETF">Canadian ETFs</button>
+            </div>
+
+            <!-- Scanner Table -->
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-xs">
+                <thead>
+                  <tr class="border-b border-slate-800 text-[10px] text-slate-500 uppercase font-semibold">
+                    <th class="py-2">Asset</th>
+                    <th class="py-2">Route</th>
+                    <th class="py-2 text-right">Price</th>
+                    <th class="py-2 text-right">Net EV</th>
+                    <th class="py-2 text-center">Action</th>
+                    <th class="py-2 text-right">Trade</th>
+                  </tr>
+                </thead>
+                <tbody id="scanner-table-body" class="divide-y divide-slate-800/60 font-mono">
+                  <!-- Dynamically populated rows -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right 6 Columns: 8-Model Benchmark Table & News Wire -->
+        <div class="lg:col-span-6 space-y-4">
+          
+          <!-- 8-Model ML/DL Benchmark -->
+          <div class="card p-4 space-y-3">
+            <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+              <div>
+                <span class="font-bold text-xs text-white uppercase tracking-wider block">8-Model ML/DL Quant Benchmark</span>
+                <span class="text-[11px] text-slate-400">Out-of-sample walk-forward validation for <strong class="text-white" id="benchmark-active-symbol">BTC-CAD</strong></span>
+              </div>
+              <button
+                type="button"
+                onclick="retrainAllModels()"
+                class="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-400 text-xs font-semibold transition border border-slate-700"
+              >
+                Force Retrain All 8
+              </button>
+            </div>
+
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-xs">
+                <thead>
+                  <tr class="border-b border-slate-800 text-[10px] text-slate-500 uppercase font-semibold">
+                    <th class="py-2">Model Family</th>
+                    <th class="py-2 text-right">Val MAPE</th>
+                    <th class="py-2 text-right">vs. Naive</th>
+                    <th class="py-2 text-right">Hit Rate</th>
+                    <th class="py-2 text-right">P50 Target</th>
+                    <th class="py-2 text-right">Weight</th>
+                  </tr>
+                </thead>
+                <tbody id="benchmark-table-body" class="divide-y divide-slate-800/60 font-mono">
+                  <!-- Dynamically populated 8 rows -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Live Market Intelligence News Wire -->
+          <div class="card p-4 space-y-3">
+            <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+              <span class="font-bold text-xs text-white uppercase tracking-wider">Live Catalyst &amp; News Wire</span>
+              <span id="news-sentiment-badge" class="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300">
+                Sentiment: 0.00
+              </span>
+            </div>
+            <div id="news-wire-list" class="space-y-2 text-xs">
+              <!-- Dynamically populated headlines -->
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- ═════════════════════════════════════════════════════════════════════ -->
+    <!-- TAB 3: PORTFOLIOS & LEADERBOARD                                      -->
+    <!-- ═════════════════════════════════════════════════════════════════════ -->
+    <div id="tab-portfolios" class="tab-pane hidden space-y-6">
+      
+      <!-- Multi-Account Leaderboard -->
+      <div class="card p-4 space-y-3">
+        <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+          <div>
+            <span class="font-bold text-xs text-white uppercase tracking-wider block">Multi-Account Alpha Leaderboard</span>
+            <span class="text-[11px] text-slate-400">Compare virtual performance and live trade executions across accounts</span>
+          </div>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs">
+            <thead>
+              <tr class="border-b border-slate-800 text-[10px] text-slate-500 uppercase font-semibold">
+                <th class="py-2">Trader</th>
+                <th class="py-2">WS Tier</th>
+                <th class="py-2 text-right">Starting CAD</th>
+                <th class="py-2 text-right">Current Equity</th>
+                <th class="py-2 text-right">Net Return %</th>
+                <th class="py-2 text-center">Open Virtual</th>
+                <th class="py-2 text-center">Closed Trades</th>
+                <th class="py-2 text-center">Real WS Fills</th>
+              </tr>
+            </thead>
+            <tbody id="leaderboard-table-body" class="divide-y divide-slate-800/60 font-mono">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Active Open Virtual Positions -->
+      <div class="card p-4 space-y-3">
+        <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+          <span class="font-bold text-xs text-white uppercase tracking-wider">Active Open Virtual Positions</span>
+          <span id="open-positions-count-badge" class="text-xs text-slate-400">0 Open</span>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs">
+            <thead>
+              <tr class="border-b border-slate-800 text-[10px] text-slate-500 uppercase font-semibold">
+                <th class="py-2">Asset</th>
+                <th class="py-2">Units</th>
+                <th class="py-2 text-right">Entry Price</th>
+                <th class="py-2 text-right">Current Mark</th>
+                <th class="py-2 text-right">Unrealized PnL</th>
+                <th class="py-2 text-right">Stop P10</th>
+                <th class="py-2 text-right">Target P90</th>
+                <th class="py-2 text-center">Action</th>
+              </tr>
+            </thead>
+            <tbody id="open-virtual-table-body" class="divide-y divide-slate-800/60 font-mono">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Completed Virtual Trade History -->
+      <div class="card p-4 space-y-3">
+        <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+          <span class="font-bold text-xs text-white uppercase tracking-wider">Completed Virtual Trades Ledger</span>
+        </div>
+
+        <div class="overflow-x-auto max-h-72 overflow-y-auto">
+          <table class="w-full text-left text-xs">
+            <thead>
+              <tr class="border-b border-slate-800 text-[10px] text-slate-500 uppercase font-semibold">
+                <th class="py-2">Asset</th>
+                <th class="py-2 text-right">Entry</th>
+                <th class="py-2 text-right">Exit</th>
+                <th class="py-2 text-right">Gross PnL</th>
+                <th class="py-2 text-right">WS Fees</th>
+                <th class="py-2 text-right">Net PnL CAD</th>
+                <th class="py-2 text-right">Return %</th>
+                <th class="py-2">Reason</th>
+                <th class="py-2">Closed At</th>
+              </tr>
+            </thead>
+            <tbody id="closed-virtual-table-body" class="divide-y divide-slate-800/60 font-mono">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Real Wealthsimple Trades Ledger -->
+      <div class="card p-4 space-y-3">
+        <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+          <span class="font-bold text-xs text-white uppercase tracking-wider">Real Wealthsimple Fills Ledger</span>
+          <button
+            type="button"
+            onclick="openLogRealTradeModal()"
+            class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-sky-400 text-xs font-semibold"
+          >
+            + Log Fill
+          </button>
+        </div>
+
+        <div class="overflow-x-auto max-h-72 overflow-y-auto">
+          <table class="w-full text-left text-xs">
+            <thead>
+              <tr class="border-b border-slate-800 text-[10px] text-slate-500 uppercase font-semibold">
+                <th class="py-2">TX ID</th>
+                <th class="py-2">Symbol</th>
+                <th class="py-2">Status</th>
+                <th class="py-2 text-right">Entry</th>
+                <th class="py-2 text-right">Exit</th>
+                <th class="py-2 text-right">Capital CAD</th>
+                <th class="py-2 text-right">Realized CAD</th>
+                <th class="py-2 text-right">Realized %</th>
+                <th class="py-2 text-center">Action</th>
+              </tr>
+            </thead>
+            <tbody id="real-ws-table-body" class="divide-y divide-slate-800/60 font-mono">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- System Telemetry & Wallet Reset -->
+      <div class="card p-4 space-y-4">
+        <div class="pb-2 border-b border-slate-800 font-bold text-xs text-white uppercase tracking-wider">
+          Account Settings &amp; Hardware Telemetry
+        </div>
+
+        <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs font-mono">
+          <div class="p-3 rounded-lg bg-slate-950 border border-slate-800">
+            <span class="text-slate-500 text-[10px] uppercase block">PyTorch CUDA GPU</span>
+            <span id="telemetry-gpu" class="font-bold text-white text-sm">RTX 4070 Laptop</span>
+            <span id="telemetry-gpu-vram" class="text-slate-400 text-[11px] block mt-0.5">8.0 GB GDDR6</span>
+          </div>
+
+          <div class="p-3 rounded-lg bg-slate-950 border border-slate-800">
+            <span class="text-slate-500 text-[10px] uppercase block">System RAM</span>
+            <span id="telemetry-ram" class="font-bold text-white text-sm">32 GB</span>
+            <span id="telemetry-ram-load" class="text-slate-400 text-[11px] block mt-0.5">38% Active</span>
+          </div>
+
+          <div class="p-3 rounded-lg bg-slate-950 border border-slate-800">
+            <span class="text-slate-500 text-[10px] uppercase block">SQLite Database</span>
+            <span id="telemetry-db-mode" class="font-bold text-emerald-400 text-sm">WAL Active</span>
+            <span id="telemetry-db-size" class="text-slate-400 text-[11px] block mt-0.5">tradesense.db</span>
+          </div>
+
+          <div class="p-3 rounded-lg bg-slate-950 border border-slate-800 flex flex-col justify-between">
+            <span class="text-slate-500 text-[10px] uppercase block">Reset Virtual Cash</span>
+            <button
+              type="button"
+              onclick="resetVirtualWallet()"
+              class="w-full mt-2 py-1.5 px-3 rounded bg-rose-950/70 hover:bg-rose-900 border border-rose-800 text-rose-300 text-xs font-semibold"
+            >
+              Reset to $10,000 CAD
+            </button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="border-t border-slate-800/80 bg-slate-950 py-3 text-center text-xs text-slate-500">
+    <div class="max-w-[1720px] mx-auto px-4 flex items-center justify-between">
+      <span>TradeSense v7 · Modern Institutional Wealthsimple Terminal</span>
+      <span class="text-[11px]">Single Permanent Gateway · Zero Dual URLs</span>
+    </div>
+  </footer>
+
+  <!-- Modal: Log Real Wealthsimple Trade Fill -->
+  <div id="modal-log-trade" class="hidden fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="card max-w-md w-full p-6 space-y-4 shadow-2xl bg-slate-900 border-slate-700">
+      <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+        <h3 class="font-bold text-sm text-white">Log Real Wealthsimple Mobile Fill</h3>
+        <button type="button" onclick="closeLogRealTradeModal()" class="text-slate-400 hover:text-white">&times;</button>
+      </div>
+
+      <div class="space-y-3 text-xs">
+        <div>
+          <label class="block text-slate-400 mb-1">Ticker / Asset</label>
+          <input type="text" id="log-real-ticker" class="w-full px-3 py-1.5 rounded bg-slate-950 border border-slate-800 text-white font-mono uppercase" readonly>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-slate-400 mb-1">Fill Price ($)</label>
+            <input type="number" step="0.0001" id="log-real-entry" class="w-full px-3 py-1.5 rounded bg-slate-950 border border-slate-800 text-white font-mono">
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-1">Quantity</label>
+            <input type="number" step="0.0001" id="log-real-qty" class="w-full px-3 py-1.5 rounded bg-slate-950 border border-slate-800 text-white font-mono">
+          </div>
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">Target Price ($)</label>
+          <input type="number" step="0.0001" id="log-real-target" class="w-full px-3 py-1.5 rounded bg-slate-950 border border-slate-800 text-white font-mono">
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">Stop Loss ($)</label>
+          <input type="number" step="0.0001" id="log-real-stop" class="w-full px-3 py-1.5 rounded bg-slate-950 border border-slate-800 text-white font-mono">
+        </div>
+      </div>
+
+      <div class="flex items-center justify-end gap-2 pt-2">
+        <button type="button" onclick="closeLogRealTradeModal()" class="px-4 py-2 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs">Cancel</button>
+        <button type="button" onclick="submitLogRealTrade()" class="px-4 py-2 rounded bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold">Save Real Fill</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast">
+    <span id="toast-text">Message</span>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
