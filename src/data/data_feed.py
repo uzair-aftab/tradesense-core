@@ -686,8 +686,20 @@ class DataLake:
     # ── FinBERT scoring ────────────────────────────────────────────────
 
     def _score_finbert(self, headlines: List[str]) -> float:
-        """Deterministic financial sentiment scoring (routed to VADER + Financial Lexicon)."""
-        return self._score_vader(headlines)
+        """
+        Score headlines using GPU ProsusAI/finbert (with automatic VADER fallback
+        when running offline or without transformers cache).
+        """
+        if not headlines:
+            return 0.0
+        try:
+            from src.data.finbert_engine import finbert_engine
+            results = finbert_engine.score_texts(headlines)
+            scores = [r.net_score for r in results]
+            return float(np.clip(np.mean(scores), -1.0, 1.0)) if scores else 0.0
+        except Exception as exc:
+            logger.debug("FinBERT batch score fallback to VADER: %s", exc)
+            return self._score_vader(headlines)
 
     def _score_finbert_legacy(self, headlines: List[str]) -> float:
         """

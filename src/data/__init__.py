@@ -16,6 +16,9 @@ from src.data.ws_catalog import (
 from src.data.database import DatabaseManager, db_manager, get_database
 from src.data.profiles import ProfileManager, profile_manager, UserProfile
 from src.data.market_intel import MarketIntelligenceEngine, market_intel
+from src.data.finbert_engine import FinBERTEngine, FinBERTResult, finbert_engine
+from src.data.finnhub_client import FinnhubClient, finnhub_client
+from src.data.prediction_feed import KalshiPredictionFeed, PredictionMarket, prediction_feed
 
 __all__ = [
     "DataLake",
@@ -34,4 +37,12 @@ __all__ = [
     "UserProfile",
     "MarketIntelligenceEngine",
     "market_intel",
+    "FinBERTEngine",
+    "FinBERTResult",
+    "finbert_engine",
+    "FinnhubClient",
+    "finnhub_client",
+    "KalshiPredictionFeed",
+    "PredictionMarket",
+    "prediction_feed",
 ]

@@ -93,9 +93,9 @@
     </div>
   </header>
 
-  <!-- 3 Navigation Tabs (pr-plan style) -->
-  <div class="border-b border-slate-800/80 bg-slate-950/60">
-    <div class="max-w-[1720px] mx-auto px-4 sm:px-6 flex items-center gap-1">
+  <!-- 4 Navigation Tabs (pr-plan style) -->
+  <div class="border-b border-slate-800/80 bg-slate-950/60 overflow-x-auto">
+    <div class="max-w-[1720px] mx-auto px-4 sm:px-6 flex items-center gap-1 whitespace-nowrap">
       <button type="button" class="tab-btn active" data-tab="terminal">
         1. Terminal &amp; Execution
       </button>
@@ -104,6 +104,9 @@
       </button>
       <button type="button" class="tab-btn" data-tab="portfolios">
         3. Portfolios &amp; Leaderboard
+      </button>
+      <button type="button" class="tab-btn" data-tab="predictions">
+        4. Prediction Markets (WS Predict)
       </button>
     </div>
   </div>
@@ -707,6 +710,42 @@
         </div>
       </div>
 
+      <!-- Wealthsimple Predict Sandbox Summary inside Tab 3 -->
+      <div class="card p-4 space-y-3">
+        <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+          <div>
+            <span class="font-bold text-xs text-white uppercase tracking-wider block">Wealthsimple Predict ($500 USD Sandbox) Leaderboard</span>
+            <span class="text-[11px] text-slate-400">Macro &amp; Financial binary event performance &amp; Brier calibration score</span>
+          </div>
+          <button
+            type="button"
+            onclick="switchTab('predictions')"
+            class="px-3 py-1 rounded bg-sky-950 hover:bg-sky-900 border border-sky-800 text-sky-300 text-xs font-semibold"
+          >
+            Open Predict Desk &rarr;
+          </button>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs">
+            <thead>
+              <tr class="border-b border-slate-800 text-[10px] text-slate-500 uppercase font-semibold">
+                <th class="py-2">Trader</th>
+                <th class="py-2 text-right">Starting USD</th>
+                <th class="py-2 text-right">Predict Equity USD</th>
+                <th class="py-2 text-right">Net Return %</th>
+                <th class="py-2 text-center">Open Contracts</th>
+                <th class="py-2 text-center">Settled</th>
+                <th class="py-2 text-right">AI Brier Score</th>
+              </tr>
+            </thead>
+            <tbody id="portfolios-predict-lb-body" class="divide-y divide-slate-800/60 font-mono">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <!-- System Telemetry & Wallet Reset -->
       <div class="card p-4 space-y-4">
         <div class="pb-2 border-b border-slate-800 font-bold text-xs text-white uppercase tracking-wider">
@@ -741,6 +780,383 @@
             >
               Reset to $10,000 CAD
             </button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ═════════════════════════════════════════════════════════════════════ -->
+    <!-- TAB 4: PREDICTION MARKETS (WEALTHSIMPLE PREDICT / KALSHI / FINBERT)  -->
+    <!-- ═════════════════════════════════════════════════════════════════════ -->
+    <div id="tab-predictions" class="tab-pane hidden space-y-5">
+
+      <!-- Top 4-Stat Telemetry Bar -->
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="card p-4">
+          <div class="stat-label flex items-center justify-between">
+            <span>NLP Sentiment Engine</span>
+            <span id="pred-finnhub-badge" class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">Finnhub Live</span>
+          </div>
+          <div class="stat-value text-sky-400 text-lg mt-1" id="pred-finbert-backend">FinBERT GPU</div>
+          <div class="stat-sub font-mono text-[11px]" id="pred-finbert-device">NVIDIA RTX 4070 · ProsusAI/finbert</div>
+        </div>
+
+        <div class="card p-4">
+          <div class="stat-label">Next Major Macro Catalyst</div>
+          <div class="stat-value text-white text-base mt-1 truncate" id="pred-next-catalyst-title">Loading Calendar...</div>
+          <div class="stat-sub flex items-center gap-2 font-mono text-[11px]">
+            <span id="pred-next-catalyst-countdown" class="text-amber-400 font-bold">—</span>
+            <span class="text-slate-600">·</span>
+            <span id="pred-next-catalyst-lead" class="text-slate-400 truncate">—</span>
+          </div>
+        </div>
+
+        <div class="card p-4">
+          <div class="stat-label flex items-center justify-between">
+            <span>Predict Sandbox (USD)</span>
+            <button
+              type="button"
+              id="btn-pred-autopilot"
+              onclick="togglePredictAutoPilot()"
+              class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-800"
+              title="Toggle 60s Autonomous $5 Micro-Betting (>= +4% Net EV)"
+            >
+              Auto-Pilot: ON
+            </button>
+          </div>
+          <div class="stat-value text-white font-mono mt-1" id="pred-sandbox-equity">$500.00</div>
+          <div class="stat-sub flex items-center justify-between text-[11px] font-mono">
+            <span>Cash: <strong id="pred-sandbox-cash" class="text-slate-200">$500.00</strong> (<span id="pred-sandbox-ret" class="text-emerald-400">+0.0%</span>)</span>
+            <button type="button" onclick="resetPredictSandbox()" class="text-slate-500 hover:text-rose-400 underline">Reset $500</button>
+          </div>
+        </div>
+
+        <div class="card p-4">
+          <div class="stat-label">AI vs. Market Calibration</div>
+          <div class="stat-value text-emerald-400 font-mono mt-1" id="pred-brier-ai">Calibrating</div>
+          <div class="stat-sub flex items-center gap-2 font-mono text-[11px]">
+            <span>Win Rate: <strong id="pred-win-rate" class="text-slate-200">0.0%</strong></span>
+            <span class="text-slate-600">·</span>
+            <span id="pred-settled-count" class="text-slate-400">0 Settled</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Macro Event Countdown Strip -->
+      <div class="card p-3 space-y-2">
+        <div class="flex items-center justify-between text-[11px] text-slate-400">
+          <span class="font-bold uppercase tracking-wider text-slate-300">Upcoming Macro &amp; Central Bank Catalysts (Kalshi Live + Finnhub)</span>
+          <button type="button" onclick="loadMacroCalendar(true)" class="text-sky-400 hover:text-sky-300 font-medium">Refresh Calendar</button>
+        </div>
+        <div id="pred-macro-calendar-strip" class="flex items-stretch gap-2.5 overflow-x-auto pb-1">
+          <!-- Dynamically populated -->
+        </div>
+      </div>
+
+      <!-- Main 12-Column Predict Workspace Grid -->
+      <div class="grid grid-cols-1 xl:grid-cols-12 gap-5">
+
+        <!-- Left 4 Cols: WS Predict Alpha Scanner -->
+        <div class="xl:col-span-4 card p-4 flex flex-col space-y-3">
+          <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+            <div>
+              <span class="font-bold text-xs text-white uppercase tracking-wider block">WS Predict Alpha Scanner</span>
+              <span class="text-[11px] text-slate-400">Ranked by Net EV % after exact Kalshi variable fees</span>
+            </div>
+            <button type="button" onclick="loadPredictionMarkets(true)" class="px-2.5 py-1 rounded bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold">Scan</button>
+          </div>
+
+          <div class="flex items-center gap-1.5 flex-wrap">
+            <button type="button" class="pill-btn pred-cat-btn active" data-cat="ALL">All</button>
+            <button type="button" class="pill-btn pred-cat-btn" data-cat="CENTRAL_BANKS">Central Banks</button>
+            <button type="button" class="pill-btn pred-cat-btn" data-cat="MACRO_DATA">Macro Data</button>
+            <button type="button" class="pill-btn pred-cat-btn" data-cat="FINANCIALS">Financials</button>
+            <button type="button" class="pill-btn pred-cat-btn" data-cat="CLIMATE">Climate</button>
+          </div>
+
+          <div class="flex items-center justify-between gap-2 text-xs">
+            <input type="text" id="pred-search-input" placeholder="Filter FOMC, CPI, BoC, S&amp;P, BTC..." class="flex-1 px-2.5 py-1.5 rounded bg-slate-950 border border-slate-800 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500">
+            <label class="flex items-center gap-1.5 text-[11px] text-slate-400 cursor-pointer shrink-0" title="Filter strictly to CIRO-permitted Canadian Wealthsimple Predict contracts">
+              <input type="checkbox" id="pred-ws-only" checked onchange="loadPredictionMarkets(false)" class="rounded bg-slate-900 border-slate-700 text-sky-500 focus:ring-0">
+              <span>WS Eligible</span>
+            </label>
+          </div>
+
+          <div class="overflow-y-auto max-h-[620px] pr-1">
+            <table class="w-full text-left text-xs">
+              <thead class="sticky top-0 bg-slate-900/95">
+                <tr class="border-b border-slate-800 text-[10px] text-slate-500 uppercase font-semibold">
+                  <th class="py-2">Event / Outcome</th>
+                  <th class="py-2 text-right">YES / AI</th>
+                  <th class="py-2 text-right">Net EV</th>
+                  <th class="py-2 text-right">Edge</th>
+                </tr>
+              </thead>
+              <tbody id="pred-scanner-body" class="divide-y divide-slate-800/60 font-mono">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Center 5 Cols: Event Deep-Dive, Probability Chart & FinBERT Wire -->
+        <div class="xl:col-span-5 space-y-4">
+          <div class="card p-4 space-y-3">
+            <div class="flex items-start justify-between gap-3 pb-2 border-b border-slate-800">
+              <div>
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span id="pred-ev-series-badge" class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-sky-300 font-mono font-semibold">—</span>
+                  <span id="pred-ev-ciro-badge" class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 font-semibold">WS Predict Eligible</span>
+                  <span id="pred-ev-close-badge" class="text-[10px] font-mono text-slate-400">—</span>
+                </div>
+                <h2 id="pred-ev-title" class="text-base font-bold text-white mt-1.5">Select an event from the Scanner or Macro Calendar</h2>
+                <p id="pred-ev-subtitle" class="text-[11px] text-slate-400 mt-0.5">—</p>
+              </div>
+              <div id="pred-fred-pill" class="hidden shrink-0 px-2 py-1 rounded bg-slate-950 border border-slate-800 text-[10px] font-mono text-slate-300">
+                FRED: —
+              </div>
+            </div>
+
+            <!-- Multi-Outcome Market vs AI Probability Bars -->
+            <div class="space-y-1.5">
+              <div class="flex items-center justify-between text-[10px] text-slate-500 uppercase font-semibold">
+                <span>All Outcomes (Market Implied vs. AI Fair Prob)</span>
+                <span>Click outcome to inspect &amp; trade</span>
+              </div>
+              <div id="pred-outcomes-list" class="space-y-1.5 max-h-56 overflow-y-auto pr-1">
+                <!-- Dynamically populated -->
+              </div>
+            </div>
+
+            <!-- Implied Probability History Chart (TradingView Lightweight Charts v4) -->
+            <div class="pt-2 border-t border-slate-800/80 space-y-2">
+              <div class="flex items-center justify-between text-xs">
+                <div class="flex items-center gap-1.5">
+                  <span class="text-slate-400 text-[11px] font-medium">Probability (c):</span>
+                  <button type="button" class="pill-btn px-2 font-bold" onclick="predChartZoomIn()">+</button>
+                  <button type="button" class="pill-btn px-2 font-bold" onclick="predChartZoomOut()">−</button>
+                  <button type="button" class="pill-btn" onclick="predChartReset()">Reset</button>
+                </div>
+                <span class="text-[10px] font-mono text-slate-400">White = Market Price · Dashed Sky = AI Fair %</span>
+              </div>
+              <div id="predict-chart-container" class="w-full h-[230px] rounded-lg overflow-hidden bg-slate-950 border border-slate-900 relative"></div>
+            </div>
+
+            <!-- Orderbook Depth Skew -->
+            <div class="pt-2 border-t border-slate-800/80 flex items-center justify-between gap-4 text-[11px] font-mono">
+              <span>YES Bids: <strong id="pred-ob-yes" class="text-emerald-400">$0</strong></span>
+              <div class="flex-1 h-2 rounded-full bg-slate-950 border border-slate-800 overflow-hidden flex">
+                <div id="pred-ob-yes-bar" class="bg-emerald-500/80 h-full" style="width: 50%"></div>
+                <div id="pred-ob-no-bar" class="bg-rose-500/80 h-full" style="width: 50%"></div>
+              </div>
+              <span>NO Bids: <strong id="pred-ob-no" class="text-rose-400">$0</strong></span>
+              <span class="text-slate-500">Spread: <strong id="pred-ob-spread" class="text-slate-200">—</strong></span>
+            </div>
+          </div>
+
+          <!-- FinBERT-Scored Finnhub Macro Wire -->
+          <div class="card p-4 space-y-2.5">
+            <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+              <span class="font-bold text-xs text-white uppercase tracking-wider">FinBERT Macro Catalyst Wire (Finnhub Live)</span>
+              <span id="pred-news-shift-badge" class="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300">Shift: 0.00</span>
+            </div>
+            <div id="pred-news-list" class="space-y-2 max-h-56 overflow-y-auto pr-1 text-xs">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Right 3 Cols: Wealthsimple Predict Micro-Stake Ticket -->
+        <div class="xl:col-span-3 space-y-4">
+          <div class="card p-4 space-y-3.5">
+            <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+              <span class="font-bold text-xs text-white uppercase tracking-wider">WS Predict Ticket</span>
+              <span class="text-[10px] px-2 py-0.5 rounded bg-sky-950 text-sky-300 border border-sky-800 font-semibold">$1 Min · Fractional</span>
+            </div>
+
+            <div>
+              <div id="pred-ticket-outcome" class="text-sm font-bold text-white">—</div>
+              <div id="pred-ticket-ticker" class="text-[11px] font-mono text-slate-400 mt-0.5">—</div>
+            </div>
+
+            <!-- AI Edge Reasoning -->
+            <div class="p-2.5 rounded-lg bg-slate-950 border border-slate-800 space-y-1 text-[11px] text-slate-300 leading-relaxed" id="pred-ticket-reasons">
+              Select a contract to inspect FinBERT &amp; fee-adjusted edge.
+            </div>
+
+            <!-- YES / NO Selector -->
+            <div class="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                id="btn-pred-side-yes"
+                onclick="selectPredictSide('YES')"
+                class="py-2 px-3 rounded-lg bg-emerald-600/20 border border-emerald-500 text-emerald-300 font-bold text-xs transition"
+              >
+                BUY YES <span id="pred-btn-yes-c" class="block font-mono text-[11px]">50.0c</span>
+              </button>
+              <button
+                type="button"
+                id="btn-pred-side-no"
+                onclick="selectPredictSide('NO')"
+                class="py-2 px-3 rounded-lg bg-slate-950 border border-slate-800 text-slate-400 font-bold text-xs transition hover:border-rose-500"
+              >
+                BUY NO <span id="pred-btn-no-c" class="block font-mono text-[11px]">50.0c</span>
+              </button>
+            </div>
+
+            <!-- Quick Micro-Stake Pills ($1, $5, $10, $25, $50, Kelly) -->
+            <div class="space-y-2">
+              <div class="flex items-center justify-between text-[11px] text-slate-400">
+                <span>Stake (USD · Min $1)</span>
+                <button type="button" onclick="applyPredictKelly()" id="btn-pred-kelly" class="text-sky-400 hover:text-sky-300 font-mono font-semibold">Kelly ($5.00)</button>
+              </div>
+              <div class="grid grid-cols-5 gap-1">
+                <button type="button" class="pill-btn pred-stake-preset" onclick="setPredictStake(1)">$1</button>
+                <button type="button" class="pill-btn pred-stake-preset active" onclick="setPredictStake(5)">$5</button>
+                <button type="button" class="pill-btn pred-stake-preset" onclick="setPredictStake(10)">$10</button>
+                <button type="button" class="pill-btn pred-stake-preset" onclick="setPredictStake(25)">$25</button>
+                <button type="button" class="pill-btn pred-stake-preset" onclick="setPredictStake(50)">$50</button>
+              </div>
+              <input
+                type="number"
+                id="pred-stake-usd"
+                value="5"
+                min="1"
+                max="500"
+                step="1"
+                oninput="recalcPredictTicket()"
+                class="w-full px-3 py-1.5 rounded bg-slate-950 border border-slate-800 text-white font-mono text-sm font-bold focus:outline-none focus:border-sky-500"
+              >
+            </div>
+
+            <!-- Live Economics Breakdown -->
+            <div class="p-3 rounded-lg bg-slate-950 border border-slate-800 space-y-1.5 text-xs font-mono">
+              <div class="flex justify-between">
+                <span class="text-slate-400 font-sans">Contracts ($1 Payout)</span>
+                <span id="pred-calc-contracts" class="text-white font-bold">0.00</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-slate-400 font-sans">Kalshi Fee</span>
+                <span id="pred-calc-fee" class="text-slate-300">$0.00</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-slate-400 font-sans">Total Cost</span>
+                <span class="text-white"><strong id="pred-calc-cost-usd">$0.00</strong> <span id="pred-calc-cost-cad" class="text-slate-400 text-[10px]">($0 CAD)</span></span>
+              </div>
+              <div class="flex justify-between pt-1 border-t border-slate-800/80">
+                <span class="text-slate-400 font-sans">If Right (Net Profit)</span>
+                <span id="pred-calc-profit" class="text-emerald-400 font-bold">+$0.00 (+0%)</span>
+              </div>
+              <div class="flex justify-between">
+                <span class="text-slate-400 font-sans">Breakeven / Net EV</span>
+                <span><span id="pred-calc-breakeven" class="text-slate-300">50%</span> · <strong id="pred-calc-ev" class="text-sky-400">+0.0%</strong></span>
+              </div>
+            </div>
+
+            <!-- Execution Buttons -->
+            <div class="space-y-2 pt-1">
+              <button
+                type="button"
+                id="btn-pred-paper-buy"
+                onclick="submitPredictPaperBuy()"
+                class="w-full py-2.5 px-4 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold shadow transition"
+              >
+                Paper Trade Virtual ($5 USD)
+              </button>
+              <div class="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onclick="copyPredictTicket()"
+                  class="py-2 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[11px] font-semibold transition"
+                >
+                  Copy WS Ticket
+                </button>
+                <button
+                  type="button"
+                  onclick="submitRealPredictFill()"
+                  class="py-2 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-emerald-300 text-[11px] font-semibold transition"
+                >
+                  Log Real WS Fill
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Row 3: Open Virtual Contracts, Settled History & Real WS Predict Fills -->
+      <div class="card p-4 space-y-3">
+        <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+          <span class="font-bold text-xs text-white uppercase tracking-wider">Open Virtual Predict Positions (Live Mark-to-Market &amp; Early Exit)</span>
+          <span id="pred-open-count-badge" class="text-xs text-slate-400 font-mono">0 Open</span>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs">
+            <thead>
+              <tr class="border-b border-slate-800 text-[10px] text-slate-500 uppercase font-semibold">
+                <th class="py-2">Event / Outcome</th>
+                <th class="py-2">Side</th>
+                <th class="py-2 text-right">Contracts</th>
+                <th class="py-2 text-right">Entry</th>
+                <th class="py-2 text-right">Live Bid</th>
+                <th class="py-2 text-right">Stake USD</th>
+                <th class="py-2 text-right">Unrealized PnL</th>
+                <th class="py-2 text-center">Action</th>
+              </tr>
+            </thead>
+            <tbody id="pred-open-pos-body" class="divide-y divide-slate-800/60 font-mono">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 xl:grid-cols-2 gap-5">
+        <div class="card p-4 space-y-3">
+          <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+            <span class="font-bold text-xs text-white uppercase tracking-wider">Settled &amp; Exited Predict Ledger (Brier Proof-of-Edge)</span>
+          </div>
+          <div class="overflow-x-auto max-h-64 overflow-y-auto">
+            <table class="w-full text-left text-xs">
+              <thead>
+                <tr class="border-b border-slate-800 text-[10px] text-slate-500 uppercase font-semibold">
+                  <th class="py-2">Contract</th>
+                  <th class="py-2">Side</th>
+                  <th class="py-2 text-right">Entry / Exit</th>
+                  <th class="py-2 text-right">Net PnL USD</th>
+                  <th class="py-2 text-right">Brier (AI/Mkt)</th>
+                  <th class="py-2">Reason</th>
+                </tr>
+              </thead>
+              <tbody id="pred-settled-body" class="divide-y divide-slate-800/60 font-mono">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card p-4 space-y-3">
+          <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+            <span class="font-bold text-xs text-white uppercase tracking-wider">Real Wealthsimple Predict Fills</span>
+          </div>
+          <div class="overflow-x-auto max-h-64 overflow-y-auto">
+            <table class="w-full text-left text-xs">
+              <thead>
+                <tr class="border-b border-slate-800 text-[10px] text-slate-500 uppercase font-semibold">
+                  <th class="py-2">TX ID</th>
+                  <th class="py-2">Outcome</th>
+                  <th class="py-2">Side</th>
+                  <th class="py-2 text-right">Stake</th>
+                  <th class="py-2">Status</th>
+                  <th class="py-2 text-right">PnL USD</th>
+                </tr>
+              </thead>
+              <tbody id="pred-real-fills-body" class="divide-y divide-slate-800/60 font-mono">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
@@ -803,5 +1219,6 @@
   </div>
 
   <script src="/static/js/app.js"></script>
+  <script src="/static/js/predictions.js"></script>
 </body>
 </html>

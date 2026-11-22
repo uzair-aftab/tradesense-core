@@ -829,7 +829,12 @@ async function loadPortfolios() {
       });
     }
 
-    // 5. Hardware Telemetry
+    // 5. Prediction Markets Leaderboard Summary
+    if (typeof window.loadPredictionPortfolioSummary === 'function' && data.prediction_leaderboard) {
+      window.loadPredictionPortfolioSummary(data.prediction_leaderboard);
+    }
+
+    // 6. Hardware Telemetry
     if (data.telemetry) {
       const gpu = data.telemetry.gpu;
       if (gpu && gpu.available) {
@@ -961,6 +966,8 @@ function switchTab(tabName) {
     }
   } else if (tabName === 'portfolios') {
     loadPortfolios();
+  } else if (tabName === 'predictions' && typeof window.initPredictionsTab === 'function') {
+    window.initPredictionsTab();
   } else if (tabName === 'terminal' && chart) {
     setTimeout(() => {
       chart.applyOptions({ width: document.getElementById('chart-container').clientWidth });

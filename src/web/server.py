@@ -27,10 +27,15 @@ from pydantic import BaseModel, Field
 from src.config import config
 from src.data.data_feed import DataLake
 from src.data.database import db_manager
-from src.data.market_intel import MarketIntelligenceEngine
+from src.data.finbert_engine import finbert_engine
+from src.data.finnhub_client import finnhub_client, fetch_fred_latest
+from src.data.market_intel import MarketIntelligenceEngine, market_intel
+from src.data.prediction_feed import prediction_feed
 from src.data.profiles import UserProfile, profile_manager
 from src.data.ws_catalog import WealthsimpleCatalog, WealthsimpleFeeSchedule
 from src.models.model_zoo import MODEL_PRESETS, ModelZooEngine
+from src.models.prediction_bot import prediction_bot_engine
+from src.models.prediction_engine import EventProbabilityModel, PredictionAlphaScanner
 from src.models.profit_engine import AlphaScanner, MarketHoursGuard, PositionRiskSizer, TrailingStopRatchet
 from src.models.virtual_bot import virtual_bot_engine
 from src.utils.health import health_check
@@ -54,13 +59,17 @@ STATIC_DIR = BASE_DIR / "static"
 # 1. Background Bot Execution Task (Every 60s)
 # ─────────────────────────────────────────────────────────────────────────────
 async def _autonomous_bot_task():
-    """Runs autonomous bot mark-to-market and order execution in the background."""
+    """Runs autonomous equity/crypto & prediction market bot cycles every 60s."""
     logger.info("Autonomous Virtual Bot background runner started (60s cycle).")
     while True:
         try:
             await asyncio.sleep(60)
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, virtual_bot_engine.run_autonomous_bot_cycle)
+            try:
+                await loop.run_in_executor(None, prediction_bot_engine.run_prediction_cycle)
+            except Exception as pred_exc:
+                logger.warning("Prediction bot background cycle warning: %s", pred_exc)
         except asyncio.CancelledError:
             logger.info("Autonomous Virtual Bot background runner stopped.")
             break
@@ -740,5 +749,292 @@ async def get_portfolios(prof: UserProfile = Depends(get_current_profile)):
         "open_virtual_positions": open_pos_views,
         "completed_virtual_trades": completed_trades,
         "real_ws_positions": real_positions,
+        "prediction_portfolio": prediction_bot_engine.get_portfolio_summary(prof.profile_id),
+        "prediction_leaderboard": prediction_bot_engine.get_predict_leaderboard(),
         "telemetry": telemetry,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 10. TradeSense v8 — Prediction Markets (Wealthsimple Predict / Kalshi) API
+# ─────────────────────────────────────────────────────────────────────────────
+@app.get("/api/predictions/macro-calendar")
+async def get_prediction_macro_calendar(force: bool = False):
+    items = prediction_feed.get_macro_calendar(force_refresh=force)
+    return {
+        "calendar": items,
+        "finbert_status": finbert_engine.get_status(),
+        "finnhub_active": finnhub_client.is_configured(),
+        "fred_active": config.has_fred_key(),
+    }
+
+
+@app.get("/api/predictions/markets")
+async def get_prediction_markets(
+    category: str = "ALL",
+    ws_only: bool = True,
+    q: str = "",
+    force: bool = False,
+    prof: UserProfile = Depends(get_current_profile),
+):
+    acct = db_manager.get_or_create_prediction_account(prof.profile_id)
+    bankroll = float(acct.get("cash_usd", 500.0))
+    scan = PredictionAlphaScanner.scan_markets(
+        category=category,
+        ws_eligible_only=ws_only,
+        search_q=q,
+        force_refresh=force,
+        bankroll_usd=max(bankroll, 50.0),
+    )
+    return scan
+
+
+@app.get("/api/predictions/event/{event_ticker}")
+async def get_prediction_event_detail(
+    event_ticker: str,
+    market_ticker: Optional[str] = None,
+    lookback: int = 14,
+    prof: UserProfile = Depends(get_current_profile),
+):
+    detail = prediction_feed.fetch_event_detail(event_ticker)
+    if detail.get("error"):
+        raise HTTPException(status_code=404, detail=detail["error"])
+
+    mkts = detail["markets"]
+    acct = db_manager.get_or_create_prediction_account(prof.profile_id)
+    bankroll = max(float(acct.get("cash_usd", 500.0)), 50.0)
+    macro_pulse = market_intel.get_macro_pulse(force_refresh=False)
+    fx_rate = float(getattr(macro_pulse, "usd_cad", 1.39) or 1.39)
+
+    intel_rep = market_intel.get_macro_topic_intelligence(
+        detail.get("domain", "FED_RATES"),
+        detail.get("keywords"),
+    )
+    articles = intel_rep.articles or []
+
+    # Choose active market cleanly (requested or highest-prob tradable outcome)
+    selected_mkt = None
+    if market_ticker:
+        for m in mkts:
+            if m.market_ticker == market_ticker:
+                selected_mkt = m
+                break
+    if selected_mkt is None and mkts:
+        tradable = [m for m in mkts if 0.03 <= m.yes_ask <= 0.95]
+        selected_mkt = tradable[0] if tradable else mkts[0]
+
+    orderbook = prediction_feed.fetch_orderbook(selected_mkt.market_ticker) if selected_mkt else {}
+    candlesticks = (
+        prediction_feed.fetch_candlesticks(detail["series_ticker"], selected_mkt.market_ticker, lookback_days=lookback)
+        if selected_mkt
+        else []
+    )
+
+    # Evaluate every child outcome market inside the event
+    eval_outcomes: List[Dict[str, Any]] = []
+    selected_eval: Optional[Dict[str, Any]] = None
+    for m in mkts:
+        ob = orderbook if (selected_mkt and m.market_ticker == selected_mkt.market_ticker) else None
+        q_anchor = None
+        if m.domain == "FINANCIALS" and m.underlying_yf_symbol:
+            q_anchor = EventProbabilityModel.compute_financial_strike_anchor(m.underlying_yf_symbol, m.outcome_label)
+        ev_res = EventProbabilityModel.evaluate_market(
+            market=m,
+            orderbook=ob,
+            macro_articles=articles,
+            quant_anchor_prob=q_anchor,
+            macro_pulse=macro_pulse,
+            fx_usd_cad=fx_rate,
+            bankroll_usd=bankroll,
+        )
+        eval_outcomes.append(ev_res)
+        if selected_mkt and m.market_ticker == selected_mkt.market_ticker:
+            selected_eval = ev_res
+
+    # Directional polarity scores per news article for the selected outcome
+    sel_hint = f"{detail['title']} {selected_mkt.outcome_label if selected_mkt else ''}"
+    pol = finbert_engine.score_macro_polarity(
+        [a.title for a in articles],
+        domain=detail.get("domain", "FED_RATES"),
+        outcome_hint=sel_hint,
+    )
+    enriched_news = []
+    for a, p_row in zip(articles, pol.get("article_scores") or []):
+        enriched_news.append({
+            "title": a.title,
+            "publisher": a.publisher,
+            "published_ago": a.published_ago,
+            "url": a.url,
+            "catalyst": a.catalyst_tag,
+            "finbert_pos": round(float(p_row.get("positive", 0.0)) * 100.0, 1),
+            "finbert_neg": round(float(p_row.get("negative", 0.0)) * 100.0, 1),
+            "finbert_neu": round(float(p_row.get("neutral", 1.0)) * 100.0, 1),
+            "net_score": round(float(p_row.get("net_score", 0.0)), 2),
+            "directional_shift": round(float(p_row.get("directional_shift", 0.0)), 2),
+            "backend": p_row.get("backend", a.sentiment_backend),
+        })
+
+    # Optional FRED context if user configured FRED_API_KEY
+    fred_snapshot = None
+    if config.has_fred_key():
+        dom_series = {
+            "FED_RATES": "FEDFUNDS",
+            "CPI_INFLATION": "CPIAUCSL",
+            "PCE": "PCEPI",
+            "GROWTH_JOBS": "UNRATE",
+        }.get(detail.get("domain", ""))
+        if dom_series:
+            fred_snapshot = fetch_fred_latest(dom_series)
+
+    return {
+        "event": {
+            "event_ticker": detail["event_ticker"],
+            "series_ticker": detail["series_ticker"],
+            "title": detail["title"],
+            "sub_title": detail["sub_title"],
+            "category": detail["category"],
+            "ui_category": detail["ui_category"],
+            "domain": detail["domain"],
+            "overround_sum": detail["overround_sum"],
+        },
+        "selected_market": selected_eval,
+        "outcomes": eval_outcomes,
+        "orderbook": orderbook,
+        "candlesticks": candlesticks,
+        "news": enriched_news,
+        "finbert_summary": {
+            "raw_mean": pol["raw_finbert_mean"],
+            "directional_shift": pol["directional_shift_score"],
+            "hawkish_dovish_index": pol["hawkish_dovish_index"],
+            "backend": pol["backend"],
+            "status": finbert_engine.get_status(),
+        },
+        "fred_snapshot": fred_snapshot,
+        "fx_usd_cad": round(fx_rate, 4),
+    }
+
+
+class PredictPaperBuyRequest(BaseModel):
+    market_ticker: str
+    side: str = Field(..., pattern="^(YES|NO|yes|no)$")
+    stake_usd: float = Field(5.0, ge=1.0, le=500.0)
+    ai_fair_prob: Optional[float] = None
+
+
+@app.post("/api/predictions/paper-buy")
+async def prediction_paper_buy(
+    payload: PredictPaperBuyRequest,
+    prof: UserProfile = Depends(get_current_profile),
+):
+    return prediction_bot_engine.execute_paper_buy(
+        user_id=prof.profile_id,
+        market_ticker=payload.market_ticker,
+        side=payload.side.upper(),
+        stake_usd=payload.stake_usd,
+        ai_fair_prob=payload.ai_fair_prob,
+    )
+
+
+class PredictPaperCloseRequest(BaseModel):
+    position_id: int
+
+
+@app.post("/api/predictions/paper-close")
+async def prediction_paper_close(
+    payload: PredictPaperCloseRequest,
+    prof: UserProfile = Depends(get_current_profile),
+):
+    return prediction_bot_engine.execute_paper_close(
+        user_id=prof.profile_id,
+        position_id=payload.position_id,
+        exit_reason="EARLY_EXIT",
+    )
+
+
+class PredictAutoPilotRequest(BaseModel):
+    enabled: bool
+    max_stake_usd: Optional[float] = Field(None, ge=1.0, le=50.0)
+
+
+@app.post("/api/predictions/auto-pilot")
+async def prediction_toggle_auto_pilot(
+    payload: PredictAutoPilotRequest,
+    prof: UserProfile = Depends(get_current_profile),
+):
+    updates: Dict[str, Any] = {"auto_pilot": 1 if payload.enabled else 0}
+    if payload.max_stake_usd is not None:
+        updates["max_stake_usd"] = float(payload.max_stake_usd)
+    db_manager.update_prediction_account(prof.profile_id, **updates)
+    return {"status": "SUCCESS", **updates}
+
+
+class PredictResetRequest(BaseModel):
+    starting_usd: float = Field(500.0, ge=50.0, le=10000.0)
+
+
+@app.post("/api/predictions/reset-sandbox")
+async def prediction_reset_sandbox(
+    payload: PredictResetRequest,
+    prof: UserProfile = Depends(get_current_profile),
+):
+    db_manager.reset_prediction_account(prof.profile_id, starting_usd=payload.starting_usd)
+    return {"status": "SUCCESS", "cash_usd": payload.starting_usd}
+
+
+class RealPredictLogRequest(BaseModel):
+    event_ticker: str = ""
+    market_ticker: str
+    event_title: str = ""
+    outcome_label: str = ""
+    side: str = Field(..., pattern="^(YES|NO|yes|no)$")
+    entry_price_usd: float = Field(..., gt=0.0, lt=1.0)
+    stake_usd: float = Field(..., ge=1.0)
+    notes: str = ""
+
+
+@app.post("/api/predictions/real-log")
+async def prediction_real_log(
+    payload: RealPredictLogRequest,
+    prof: UserProfile = Depends(get_current_profile),
+):
+    macro_pulse = market_intel.get_macro_pulse(force_refresh=False)
+    fx = float(getattr(macro_pulse, "usd_cad", 1.39) or 1.39)
+    contracts = round(payload.stake_usd / payload.entry_price_usd, 4)
+    tx_id = f"WSP_{prof.profile_id[:2].upper()}_{int(asyncio.get_running_loop().time() * 1000) % 1000000}"
+    db_manager.save_real_predict_fill({
+        "tx_id": tx_id,
+        "profile_id": prof.profile_id,
+        "event_ticker": payload.event_ticker,
+        "market_ticker": payload.market_ticker,
+        "event_title": payload.event_title or payload.market_ticker,
+        "outcome_label": payload.outcome_label or payload.market_ticker,
+        "side": payload.side.upper(),
+        "status": "OPEN",
+        "entry_price_usd": payload.entry_price_usd,
+        "contracts": contracts,
+        "stake_usd": round(payload.stake_usd, 2),
+        "stake_cad": round(payload.stake_usd * fx, 2),
+        "notes": payload.notes,
+    })
+    return {"status": "SUCCESS", "tx_id": tx_id, "contracts": contracts}
+
+
+class RealPredictCloseRequest(BaseModel):
+    tx_id: str
+    exit_price_usd: float = Field(..., ge=0.0, le=1.0)
+
+
+@app.post("/api/predictions/real-close")
+async def prediction_real_close(payload: RealPredictCloseRequest):
+    macro_pulse = market_intel.get_macro_pulse(force_refresh=False)
+    fx = float(getattr(macro_pulse, "usd_cad", 1.39) or 1.39)
+    db_manager.close_real_predict_fill(payload.tx_id, payload.exit_price_usd, fx_rate=fx)
+    return {"status": "SUCCESS"}
+
+
+@app.get("/api/predictions/portfolio")
+async def get_prediction_portfolio(prof: UserProfile = Depends(get_current_profile)):
+    return {
+        **prediction_bot_engine.get_portfolio_summary(prof.profile_id),
+        "leaderboard": prediction_bot_engine.get_predict_leaderboard(),
     }

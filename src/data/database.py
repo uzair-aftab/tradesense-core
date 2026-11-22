@@ -259,6 +259,92 @@ class DatabaseManager:
                 CREATE INDEX IF NOT EXISTS idx_sessions_token ON user_sessions(session_token);
                 CREATE INDEX IF NOT EXISTS idx_ws_trades_user_status ON wealthsimple_trades(user_id, status);
                 CREATE INDEX IF NOT EXISTS idx_user_positions_lookup ON user_positions(user_id, ticker);
+
+                -- TradeSense v8 Wealthsimple Predict (Kalshi) Sandbox & Audit Tables
+                CREATE TABLE IF NOT EXISTS prediction_paper_accounts (
+                    user_id TEXT PRIMARY KEY,
+                    starting_usd REAL DEFAULT 500.0,
+                    cash_usd REAL DEFAULT 500.0,
+                    auto_pilot INTEGER DEFAULT 1,
+                    max_stake_usd REAL DEFAULT 5.0,
+                    max_open_events INTEGER DEFAULT 5,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS prediction_paper_positions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    event_ticker TEXT NOT NULL,
+                    market_ticker TEXT NOT NULL,
+                    series_ticker TEXT NOT NULL,
+                    event_title TEXT NOT NULL,
+                    outcome_label TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    contracts REAL NOT NULL,
+                    entry_price_usd REAL NOT NULL,
+                    current_price_usd REAL NOT NULL,
+                    entry_fee_usd REAL DEFAULT 0.0,
+                    stake_usd REAL NOT NULL,
+                    stake_cad REAL NOT NULL,
+                    fx_rate REAL DEFAULT 1.39,
+                    ai_fair_prob REAL NOT NULL,
+                    market_prob_entry REAL NOT NULL,
+                    close_time TEXT,
+                    opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS prediction_paper_trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    event_ticker TEXT NOT NULL,
+                    market_ticker TEXT NOT NULL,
+                    event_title TEXT NOT NULL,
+                    outcome_label TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    contracts REAL NOT NULL,
+                    entry_price_usd REAL NOT NULL,
+                    exit_price_usd REAL NOT NULL,
+                    stake_usd REAL NOT NULL,
+                    gross_pnl_usd REAL NOT NULL,
+                    fees_usd REAL NOT NULL,
+                    net_pnl_usd REAL NOT NULL,
+                    net_pnl_cad REAL NOT NULL,
+                    roi_pct REAL NOT NULL,
+                    ai_fair_prob REAL NOT NULL,
+                    market_prob_entry REAL NOT NULL,
+                    outcome_won INTEGER DEFAULT 0,
+                    brier_ai REAL,
+                    brier_market REAL,
+                    exit_reason TEXT NOT NULL,
+                    opened_at TEXT,
+                    closed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS real_ws_predict_fills (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tx_id TEXT UNIQUE NOT NULL,
+                    profile_id TEXT NOT NULL,
+                    event_ticker TEXT NOT NULL,
+                    market_ticker TEXT NOT NULL,
+                    event_title TEXT NOT NULL,
+                    outcome_label TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    status TEXT DEFAULT 'OPEN',
+                    entry_price_usd REAL NOT NULL,
+                    contracts REAL NOT NULL,
+                    stake_usd REAL NOT NULL,
+                    stake_cad REAL NOT NULL,
+                    exit_price_usd REAL,
+                    realized_pnl_usd REAL DEFAULT 0.0,
+                    realized_pnl_cad REAL DEFAULT 0.0,
+                    notes TEXT,
+                    opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    closed_at TIMESTAMP
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_pred_pos_user ON prediction_paper_positions(user_id);
+                CREATE INDEX IF NOT EXISTS idx_pred_trades_user ON prediction_paper_trades(user_id, closed_at);
+                CREATE INDEX IF NOT EXISTS idx_real_pred_profile ON real_ws_predict_fills(profile_id, status);
                 """
             )
         with self.get_connection() as conn:
@@ -963,6 +1049,10 @@ class DatabaseManager:
             conn.execute("DELETE FROM virtual_bot_positions WHERE user_id = ?", (pid,))
             conn.execute("DELETE FROM virtual_bot_trades WHERE user_id = ?", (pid,))
             conn.execute("DELETE FROM real_ws_positions WHERE profile_id = ?", (pid,))
+            conn.execute("DELETE FROM prediction_paper_accounts WHERE user_id = ?", (pid,))
+            conn.execute("DELETE FROM prediction_paper_positions WHERE user_id = ?", (pid,))
+            conn.execute("DELETE FROM prediction_paper_trades WHERE user_id = ?", (pid,))
+            conn.execute("DELETE FROM real_ws_predict_fills WHERE profile_id = ?", (pid,))
 
     def get_real_ws_positions(self, profile_id: Optional[str] = None, status: str = "OPEN") -> List[Dict[str, Any]]:
         """Retrieve real logged Wealthsimple positions (OPEN or CLOSED)."""
@@ -1059,6 +1149,227 @@ class DatabaseManager:
                     "SELECT * FROM real_ws_positions ORDER BY opened_at DESC LIMIT ?",
                     (limit,),
                 ).fetchall()
+            return [dict(r) for r in rows]
+
+    # ======================================================================
+    #  TradeSense v8 Prediction Markets Sandbox & Audit Storage
+    # ======================================================================
+
+    def get_or_create_prediction_account(self, user_id: str, starting_usd: float = 500.0) -> Dict[str, Any]:
+        """Get or initialize a dedicated USD Predict Sandbox account for a user."""
+        uid = str(user_id).lower().strip()
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM prediction_paper_accounts WHERE user_id = ?",
+                (uid,),
+            ).fetchone()
+            if row:
+                return dict(row)
+            conn.execute(
+                """
+                INSERT INTO prediction_paper_accounts (user_id, starting_usd, cash_usd, auto_pilot, max_stake_usd, max_open_events)
+                VALUES (?, ?, ?, 1, 5.0, 5)
+                """,
+                (uid, starting_usd, starting_usd),
+            )
+            new_row = conn.execute(
+                "SELECT * FROM prediction_paper_accounts WHERE user_id = ?",
+                (uid,),
+            ).fetchone()
+            return dict(new_row) if new_row else {"user_id": uid, "starting_usd": starting_usd, "cash_usd": starting_usd, "auto_pilot": 1, "max_stake_usd": 5.0, "max_open_events": 5}
+
+    def update_prediction_account(self, user_id: str, **kwargs) -> None:
+        uid = str(user_id).lower().strip()
+        self.get_or_create_prediction_account(uid)
+        allowed = {"cash_usd", "starting_usd", "auto_pilot", "max_stake_usd", "max_open_events"}
+        updates = {k: v for k, v in kwargs.items() if k in allowed}
+        if not updates:
+            return
+        set_clause = ", ".join(f"{k} = ?" for k in updates) + ", updated_at = CURRENT_TIMESTAMP"
+        vals = list(updates.values()) + [uid]
+        with self.get_connection() as conn:
+            conn.execute(f"UPDATE prediction_paper_accounts SET {set_clause} WHERE user_id = ?", vals)
+
+    def reset_prediction_account(self, user_id: str, starting_usd: float = 500.0) -> None:
+        uid = str(user_id).lower().strip()
+        self.get_or_create_prediction_account(uid, starting_usd=starting_usd)
+        with self.get_connection() as conn:
+            conn.execute("DELETE FROM prediction_paper_positions WHERE user_id = ?", (uid,))
+            conn.execute("DELETE FROM prediction_paper_trades WHERE user_id = ?", (uid,))
+            conn.execute(
+                "UPDATE prediction_paper_accounts SET starting_usd = ?, cash_usd = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
+                (starting_usd, starting_usd, uid),
+            )
+
+    def save_prediction_position(self, pos: Dict[str, Any]) -> int:
+        with self.get_connection() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO prediction_paper_positions (
+                    user_id, event_ticker, market_ticker, series_ticker, event_title,
+                    outcome_label, side, contracts, entry_price_usd, current_price_usd,
+                    entry_fee_usd, stake_usd, stake_cad, fx_rate, ai_fair_prob,
+                    market_prob_entry, close_time
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(pos["user_id"]).lower(),
+                    pos["event_ticker"],
+                    pos["market_ticker"],
+                    pos["series_ticker"],
+                    pos["event_title"],
+                    pos["outcome_label"],
+                    pos["side"].upper(),
+                    float(pos["contracts"]),
+                    float(pos["entry_price_usd"]),
+                    float(pos.get("current_price_usd", pos["entry_price_usd"])),
+                    float(pos.get("entry_fee_usd", 0.0)),
+                    float(pos["stake_usd"]),
+                    float(pos["stake_cad"]),
+                    float(pos.get("fx_rate", 1.39)),
+                    float(pos["ai_fair_prob"]),
+                    float(pos["market_prob_entry"]),
+                    pos.get("close_time"),
+                ),
+            )
+            return int(cur.lastrowid or 0)
+
+    def get_prediction_positions(self, user_id: str) -> List[Dict[str, Any]]:
+        uid = str(user_id).lower().strip()
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM prediction_paper_positions WHERE user_id = ? ORDER BY opened_at DESC",
+                (uid,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_prediction_position_by_id(self, user_id: str, position_id: int) -> Optional[Dict[str, Any]]:
+        uid = str(user_id).lower().strip()
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM prediction_paper_positions WHERE user_id = ? AND id = ?",
+                (uid, int(position_id)),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def update_prediction_position_price(self, position_id: int, current_price_usd: float) -> None:
+        with self.get_connection() as conn:
+            conn.execute(
+                "UPDATE prediction_paper_positions SET current_price_usd = ? WHERE id = ?",
+                (float(current_price_usd), int(position_id)),
+            )
+
+    def delete_prediction_position(self, position_id: int) -> None:
+        with self.get_connection() as conn:
+            conn.execute("DELETE FROM prediction_paper_positions WHERE id = ?", (int(position_id),))
+
+    def record_prediction_trade(self, trade: Dict[str, Any]) -> None:
+        with self.get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO prediction_paper_trades (
+                    user_id, event_ticker, market_ticker, event_title, outcome_label,
+                    side, contracts, entry_price_usd, exit_price_usd, stake_usd,
+                    gross_pnl_usd, fees_usd, net_pnl_usd, net_pnl_cad, roi_pct,
+                    ai_fair_prob, market_prob_entry, outcome_won, brier_ai, brier_market,
+                    exit_reason, opened_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(trade["user_id"]).lower(),
+                    trade["event_ticker"],
+                    trade["market_ticker"],
+                    trade["event_title"],
+                    trade["outcome_label"],
+                    trade["side"].upper(),
+                    float(trade["contracts"]),
+                    float(trade["entry_price_usd"]),
+                    float(trade["exit_price_usd"]),
+                    float(trade["stake_usd"]),
+                    float(trade["gross_pnl_usd"]),
+                    float(trade["fees_usd"]),
+                    float(trade["net_pnl_usd"]),
+                    float(trade["net_pnl_cad"]),
+                    float(trade["roi_pct"]),
+                    float(trade["ai_fair_prob"]),
+                    float(trade["market_prob_entry"]),
+                    1 if trade.get("outcome_won") else 0,
+                    trade.get("brier_ai"),
+                    trade.get("brier_market"),
+                    str(trade.get("exit_reason", "EARLY_EXIT")),
+                    trade.get("opened_at"),
+                ),
+            )
+
+    def get_prediction_trades(self, user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        uid = str(user_id).lower().strip()
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM prediction_paper_trades WHERE user_id = ? ORDER BY closed_at DESC LIMIT ?",
+                (uid, int(limit)),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def save_real_predict_fill(self, data: Dict[str, Any]) -> None:
+        with self.get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO real_ws_predict_fills (
+                    tx_id, profile_id, event_ticker, market_ticker, event_title,
+                    outcome_label, side, status, entry_price_usd, contracts,
+                    stake_usd, stake_cad, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    data["tx_id"],
+                    str(data["profile_id"]).lower(),
+                    data.get("event_ticker", ""),
+                    data["market_ticker"],
+                    data.get("event_title", data["market_ticker"]),
+                    data.get("outcome_label", ""),
+                    data["side"].upper(),
+                    data.get("status", "OPEN"),
+                    float(data["entry_price_usd"]),
+                    float(data["contracts"]),
+                    float(data["stake_usd"]),
+                    float(data["stake_cad"]),
+                    data.get("notes", ""),
+                ),
+            )
+
+    def close_real_predict_fill(self, tx_id: str, exit_price_usd: float, fx_rate: float = 1.39) -> None:
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT contracts, stake_usd FROM real_ws_predict_fills WHERE tx_id = ?",
+                (tx_id,),
+            ).fetchone()
+            if row:
+                contracts = float(row["contracts"])
+                stake_usd = float(row["stake_usd"])
+                pnl_usd = round((contracts * float(exit_price_usd)) - stake_usd, 2)
+                pnl_cad = round(pnl_usd * fx_rate, 2)
+            else:
+                pnl_usd, pnl_cad = 0.0, 0.0
+            conn.execute(
+                """
+                UPDATE real_ws_predict_fills
+                SET status = 'CLOSED',
+                    exit_price_usd = ?,
+                    realized_pnl_usd = ?,
+                    realized_pnl_cad = ?,
+                    closed_at = CURRENT_TIMESTAMP
+                WHERE tx_id = ?
+                """,
+                (float(exit_price_usd), pnl_usd, pnl_cad, tx_id),
+            )
+
+    def get_real_predict_fills(self, profile_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        uid = str(profile_id).lower().strip()
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM real_ws_predict_fills WHERE profile_id = ? ORDER BY opened_at DESC LIMIT ?",
+                (uid, int(limit)),
+            ).fetchall()
             return [dict(r) for r in rows]
 
 

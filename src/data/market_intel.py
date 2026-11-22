@@ -147,6 +147,8 @@ class NewsArticle:
     sentiment: float
     sentiment_label: str
     catalyst: str
+    finbert_probs: Optional[Dict[str, float]] = None
+    sentiment_backend: str = "finbert"
 
     @property
     def age_label(self) -> str:
@@ -168,6 +170,8 @@ class NewsArticle:
             "Catalyst": self.catalyst,
             "Sentiment": f"{self.sentiment:+.2f} ({self.sentiment_label})",
             "URL": self.url,
+            "FinBERT": self.finbert_probs,
+            "Backend": self.sentiment_backend,
         }
 
 
@@ -268,6 +272,7 @@ class MarketIntelligenceEngine:
         self.news_ttl_sec = news_ttl_sec
         self.macro_ttl_sec = macro_ttl_sec
         self._news_cache: Dict[str, Tuple[float, AssetIntelligenceReport]] = {}
+        self._topic_cache: Dict[str, Tuple[float, AssetIntelligenceReport]] = {}
         self._macro_cache: Optional[Tuple[float, MacroPulseSnapshot]] = None
         self._vader = None
 
@@ -507,10 +512,82 @@ class MarketIntelligenceEngine:
             pass
         return None, None
 
+    def _enrich_articles_with_finbert(
+        self, raw_items: List[Dict[str, Any]], now: float, limit: int = 10
+    ) -> Tuple[List[NewsArticle], float, str, str]:
+        """Deduplicate raw headlines and batch-score them using GPU FinBERT."""
+        from src.data.finbert_engine import finbert_engine
+
+        seen_titles = set()
+        deduped: List[Dict[str, Any]] = []
+        for art in sorted(raw_items, key=lambda x: x.get("pub_ts", 0), reverse=True):
+            key = re.sub(r"[^a-z0-9]", "", str(art.get("title", "")).lower())[:48]
+            if key and key not in seen_titles:
+                seen_titles.add(key)
+                deduped.append(art)
+
+        top_items = deduped[:limit]
+        titles = [str(item["title"]) for item in top_items]
+        fb_scores = finbert_engine.score_texts(titles)
+
+        enriched: List[NewsArticle] = []
+        weighted_scores: List[float] = []
+        weights: List[float] = []
+        catalyst_counts: Dict[str, int] = {}
+
+        for item, fb in zip(top_items, fb_scores):
+            s_score = float(fb.net_score)
+            if s_score >= 0.15:
+                s_label = "BULLISH"
+            elif s_score <= -0.15:
+                s_label = "BEARISH"
+            else:
+                s_label = "NEUTRAL"
+
+            cat = self.classify_catalyst(item["title"])
+            catalyst_counts[cat] = catalyst_counts.get(cat, 0) + 1
+
+            age_hours = max(0.1, (now - float(item.get("pub_ts", now))) / 3600.0)
+            recency_weight = 2.0 if age_hours <= 6.0 else (1.2 if age_hours <= 24.0 else 0.7)
+            weighted_scores.append(s_score * recency_weight)
+            weights.append(recency_weight)
+
+            enriched.append(
+                NewsArticle(
+                    title=item["title"],
+                    publisher=item.get("publisher", "Market Wire"),
+                    url=item.get("url", ""),
+                    published_ts=float(item.get("pub_ts", now)),
+                    published_ago=self._format_relative_age(float(item.get("pub_ts", now))),
+                    sentiment=round(s_score, 2),
+                    sentiment_label=s_label,
+                    catalyst=cat,
+                    finbert_probs={
+                        "pos": round(fb.positive, 3),
+                        "neg": round(fb.negative, 3),
+                        "neu": round(fb.neutral, 3),
+                    },
+                    sentiment_backend=fb.backend,
+                )
+            )
+
+        agg_sentiment = float(np.sum(weighted_scores) / max(1e-6, np.sum(weights))) if weights else 0.0
+        agg_sentiment = round(float(np.clip(agg_sentiment, -1.0, 1.0)), 2)
+
+        if agg_sentiment >= 0.15:
+            agg_label = "BULLISH CATALYST"
+        elif agg_sentiment <= -0.15:
+            agg_label = "BEARISH HEADWIND"
+        else:
+            agg_label = "NEUTRAL / BALANCED"
+
+        dominant_cat = max(catalyst_counts.items(), key=lambda kv: kv[1])[0] if catalyst_counts else "MARKET PULSE"
+        return enriched, agg_sentiment, agg_label, dominant_cat
+
     def get_asset_intelligence(self, ticker: str, force_refresh: bool = False) -> AssetIntelligenceReport:
         """
-        Retrieve live news headlines, time-decayed sentiment score, dominant catalyst,
-        and earnings warnings for any ticker.
+        Retrieve live news headlines from Finnhub + Yahoo Finance + Google RSS,
+        batch-scored via GPU FinBERT, plus dominant catalyst and earnings warnings.
         """
         norm_ticker = ticker.upper().strip()
         now = time.time()
@@ -526,22 +603,19 @@ class MarketIntelligenceEngine:
         )
 
         raw_articles: List[Dict[str, Any]] = []
+        try:
+            from src.data.finnhub_client import finnhub_client
+            if finnhub_client.is_configured():
+                raw_articles.extend(finnhub_client.get_company_news(norm_ticker, days=7, max_items=8))
+        except Exception:
+            pass
+
         raw_articles.extend(self._fetch_yfinance_news(yf_sym, max_items=6))
-        if len(raw_articles) < 5:
+        if len(raw_articles) < 6:
             raw_articles.extend(self._fetch_google_rss_news(rss_query, max_items=8))
 
-        # Deduplicate by normalized title prefix
-        seen_titles = set()
-        deduped: List[Dict[str, Any]] = []
-        for art in sorted(raw_articles, key=lambda x: x.get("pub_ts", 0), reverse=True):
-            key = re.sub(r"[^a-z0-9]", "", art["title"].lower())[:45]
-            if key and key not in seen_titles:
-                seen_titles.add(key)
-                deduped.append(art)
-
-        # Fallback synthesized market context if running in offline sandbox
-        if not deduped:
-            deduped = [
+        if not raw_articles:
+            raw_articles = [
                 {
                     "title": f"{norm_ticker} institutional order-flow & liquidity profile remains active across Canadian & US venues",
                     "publisher": "TradeSense Market Desk",
@@ -550,52 +624,7 @@ class MarketIntelligenceEngine:
                 }
             ]
 
-        enriched: List[NewsArticle] = []
-        weighted_scores: List[float] = []
-        weights: List[float] = []
-        catalyst_counts: Dict[str, int] = {}
-
-        for item in deduped[:8]:
-            s_score = self.score_headline_sentiment(item["title"])
-            if s_score >= 0.15:
-                s_label = "BULLISH"
-            elif s_score <= -0.15:
-                s_label = "BEARISH"
-            else:
-                s_label = "NEUTRAL"
-
-            cat = self.classify_catalyst(item["title"])
-            catalyst_counts[cat] = catalyst_counts.get(cat, 0) + 1
-
-            age_hours = max(0.1, (now - item["pub_ts"]) / 3600.0)
-            recency_weight = 2.0 if age_hours <= 6.0 else (1.2 if age_hours <= 24.0 else 0.7)
-            weighted_scores.append(s_score * recency_weight)
-            weights.append(recency_weight)
-
-            enriched.append(
-                NewsArticle(
-                    title=item["title"],
-                    publisher=item["publisher"],
-                    url=item["url"],
-                    published_ts=item["pub_ts"],
-                    published_ago=self._format_relative_age(item["pub_ts"]),
-                    sentiment=round(s_score, 2),
-                    sentiment_label=s_label,
-                    catalyst=cat,
-                )
-            )
-
-        agg_sentiment = float(np.sum(weighted_scores) / max(1e-6, np.sum(weights))) if weights else 0.0
-        agg_sentiment = round(float(np.clip(agg_sentiment, -1.0, 1.0)), 2)
-
-        if agg_sentiment >= 0.18:
-            agg_label = "BULLISH CATALYST"
-        elif agg_sentiment <= -0.18:
-            agg_label = "BEARISH HEADWIND"
-        else:
-            agg_label = "NEUTRAL / BALANCED"
-
-        dominant_cat = max(catalyst_counts.items(), key=lambda kv: kv[1])[0] if catalyst_counts else "MARKET PULSE"
+        enriched, agg_sentiment, agg_label, dominant_cat = self._enrich_articles_with_finbert(raw_articles, now, limit=8)
         earn_warn, earn_date = self._check_earnings_warning(yf_sym)
 
         report = AssetIntelligenceReport(
@@ -608,6 +637,73 @@ class MarketIntelligenceEngine:
             earnings_date=earn_date,
         )
         self._news_cache[norm_ticker] = (now, report)
+        return report
+
+    def get_macro_topic_intelligence(
+        self,
+        topic: str,
+        keywords: Optional[List[str]] = None,
+        force_refresh: bool = False,
+    ) -> AssetIntelligenceReport:
+        """
+        Aggregate Finnhub general/forex/crypto news + Google News CA RSS for a
+        macro or prediction-market topic (FOMC, BoC, CPI, Jobs, S&P 500, BTC, Climate)
+        and score every article with GPU FinBERT.
+        """
+        norm_topic = topic.upper().strip()
+        now = time.time()
+        if not force_refresh and norm_topic in self._topic_cache:
+            cached_ts, cached_report = self._topic_cache[norm_topic]
+            if (now - cached_ts) < self.news_ttl_sec:
+                return cached_report
+
+        kw_list = [k.lower().strip() for k in (keywords or []) if k.strip()]
+        raw_pool: List[Dict[str, Any]] = []
+
+        try:
+            from src.data.finnhub_client import finnhub_client
+            if finnhub_client.is_configured():
+                raw_pool.extend(finnhub_client.get_market_news("general", max_items=35))
+                if any(k in norm_topic for k in ["FED", "BOC", "CPI", "PCE", "RATE", "GDP", "JOB", "PAYROLL", "MACRO"]):
+                    raw_pool.extend(finnhub_client.get_market_news("forex", max_items=15))
+                if any(k in norm_topic for k in ["BTC", "ETH", "CRYPTO"]):
+                    raw_pool.extend(finnhub_client.get_market_news("crypto", max_items=25))
+        except Exception:
+            pass
+
+        matched: List[Dict[str, Any]] = []
+        fallback_macro: List[Dict[str, Any]] = []
+        for art in raw_pool:
+            blob = f"{art.get('title', '')} {art.get('summary', '')}".lower()
+            if kw_list and any(k in blob for k in kw_list):
+                matched.append(art)
+            else:
+                fallback_macro.append(art)
+
+        if len(matched) < 5:
+            rss_q = " ".join(kw_list[:3]) if kw_list else norm_topic
+            matched.extend(self._fetch_google_rss_news(rss_q, max_items=8))
+
+        combined = matched if len(matched) >= 3 else (matched + fallback_macro[:6])
+        if not combined:
+            combined = [
+                {
+                    "title": f"{norm_topic} macroeconomic positioning remains active ahead of upcoming data release",
+                    "publisher": "TradeSense Macro Desk",
+                    "url": "https://finnhub.io",
+                    "pub_ts": now - 1200,
+                }
+            ]
+
+        enriched, agg_sentiment, agg_label, dominant_cat = self._enrich_articles_with_finbert(combined, now, limit=10)
+        report = AssetIntelligenceReport(
+            ticker=norm_topic,
+            sentiment_score=agg_sentiment,
+            sentiment_label=agg_label,
+            dominant_catalyst=dominant_cat,
+            articles=enriched,
+        )
+        self._topic_cache[norm_topic] = (now, report)
         return report
 
     def get_macro_pulse(self, force_refresh: bool = False) -> MacroPulseSnapshot:

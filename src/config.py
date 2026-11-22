@@ -29,9 +29,14 @@ class Config:
     # ── API Keys ───────────────────────────────────────────────────────
     FINNHUB_API_KEY: str = os.getenv("FINNHUB_API_KEY", "")
     MARKETAUX_API_KEY: str = os.getenv("MARKETAUX_API_KEY", "")
+    FRED_API_KEY: str = os.getenv("FRED_API_KEY", "")
     REDDIT_CLIENT_ID: str = os.getenv("REDDIT_CLIENT_ID", "")
     REDDIT_CLIENT_SECRET: str = os.getenv("REDDIT_CLIENT_SECRET", "")
     REDDIT_USER_AGENT: str = os.getenv("REDDIT_USER_AGENT", "HFP/2.0")
+
+    # ── Kalshi / Wealthsimple Predict ──────────────────────────────────
+    KALSHI_API_BASE: str = os.getenv("KALSHI_API_BASE", "https://api.elections.kalshi.com/trade-api/v2")
+    PREDICT_SANDBOX_STARTING_USD: float = float(os.getenv("PREDICT_SANDBOX_STARTING_USD", "500.0"))
 
     # ── Engine Defaults ────────────────────────────────────────────────
     DEFAULT_TIMEFRAME: str = os.getenv("DEFAULT_TIMEFRAME", "1d")
@@ -40,7 +45,7 @@ class Config:
     LSTM_HIDDEN: int = int(os.getenv("LSTM_HIDDEN", "128"))
     LSTM_SEQ_LEN: int = int(os.getenv("LSTM_SEQ_LEN", "30"))
     XGB_ESTIMATORS: int = int(os.getenv("XGB_ESTIMATORS", "500"))
-    SENTIMENT_BACKEND: str = os.getenv("SENTIMENT_BACKEND", "vader")
+    SENTIMENT_BACKEND: str = os.getenv("SENTIMENT_BACKEND", "finbert")
 
     # ── Paper Trading ──────────────────────────────────────────────────
     STARTING_CAPITAL: float = float(os.getenv("STARTING_CAPITAL", "10000"))
@@ -69,6 +74,10 @@ class Config:
     @classmethod
     def has_finnhub_key(cls) -> bool:
         return bool(cls.FINNHUB_API_KEY)
+
+    @classmethod
+    def has_fred_key(cls) -> bool:
+        return bool(cls.FRED_API_KEY.strip())
 
     @classmethod
     def has_reddit_credentials(cls) -> bool:
