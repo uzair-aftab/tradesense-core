@@ -22,18 +22,18 @@ def test_gpu_health_check():
 
 
 def test_models_health_check():
-    """Verify models health check returns boolean map for all model components."""
+    """Verify models health check returns boolean map for core ML/DL libraries."""
     models = HealthCheck.check_models()
     assert isinstance(models, dict)
-    assert "lstm" in models
-    assert "xgb_p10" in models
-    assert "xgb_p50" in models
-    assert "xgb_p90" in models
+    assert models.get("torch") is True
+    assert models.get("xgboost") is True
+    assert models.get("sklearn") is True
+    assert models.get("ready") is True
 
 
-def test_health_summary_emoji():
-    """Verify summary_emoji returns well-formatted string with status indicators."""
-    summary = HealthCheck.summary_emoji()
-    assert "GPU" in summary
-    assert "Net" in summary
-    assert "Models" in summary
+def test_health_run_all():
+    """Verify run_all returns all expected system health sections."""
+    report = HealthCheck.run_all()
+    assert isinstance(report, dict)
+    for key in ("gpu", "cpu", "memory", "database", "models", "api_keys", "internet"):
+        assert key in report
