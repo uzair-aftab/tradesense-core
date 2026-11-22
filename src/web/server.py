@@ -228,6 +228,9 @@ class SelectProfileRequest(BaseModel):
 async def select_profile(payload: SelectProfileRequest, response: Response):
     prof = profile_manager.get_profile(payload.profile_id)
     if not prof:
+        profile_manager.ensure_default_profiles()
+        prof = profile_manager.get_profile(payload.profile_id)
+    if not prof:
         raise HTTPException(status_code=404, detail="Profile not found")
 
     token = create_session_token(prof.profile_id)

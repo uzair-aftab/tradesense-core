@@ -234,40 +234,40 @@ def test_prediction_paper_lifecycle_and_brier_score(tmp_path):
 
 def test_prediction_fastapi_endpoints():
     """Verify all /api/predictions/* REST endpoints return valid 200 payloads."""
-    client = TestClient(app)
-    res_auth = client.post("/api/auth/select-profile", json={"profile_id": "uzair"})
-    assert res_auth.status_code == 200
-    token = res_auth.cookies.get(SESSION_COOKIE_NAME)
-    assert token is not None
-    client.cookies.set(SESSION_COOKIE_NAME, token)
+    with TestClient(app) as client:
+        res_auth = client.post("/api/auth/select-profile", json={"profile_id": "uzair"})
+        assert res_auth.status_code == 200
+        token = res_auth.cookies.get(SESSION_COOKIE_NAME)
+        assert token is not None
+        client.cookies.set(SESSION_COOKIE_NAME, token)
 
-    r_cal = client.get("/api/predictions/macro-calendar")
-    assert r_cal.status_code == 200
-    cal = r_cal.json()
-    assert "calendar" in cal
-    assert "finbert_status" in cal
+        r_cal = client.get("/api/predictions/macro-calendar")
+        assert r_cal.status_code == 200
+        cal = r_cal.json()
+        assert "calendar" in cal
+        assert "finbert_status" in cal
 
-    r_mkts = client.get("/api/predictions/markets?category=CENTRAL_BANKS&ws_only=true")
-    assert r_mkts.status_code == 200
-    mkts = r_mkts.json()
-    assert "opportunities" in mkts
-    assert "fx_usd_cad" in mkts
+        r_mkts = client.get("/api/predictions/markets?category=CENTRAL_BANKS&ws_only=true")
+        assert r_mkts.status_code == 200
+        mkts = r_mkts.json()
+        assert "opportunities" in mkts
+        assert "fx_usd_cad" in mkts
 
-    if mkts["opportunities"]:
-        ev_tkr = mkts["opportunities"][0]["event_ticker"]
-        r_ev = client.get(f"/api/predictions/event/{ev_tkr}")
-        assert r_ev.status_code == 200
-        ev_data = r_ev.json()
-        assert "outcomes" in ev_data
-        assert "orderbook" in ev_data
-        assert "news" in ev_data
+        if mkts["opportunities"]:
+            ev_tkr = mkts["opportunities"][0]["event_ticker"]
+            r_ev = client.get(f"/api/predictions/event/{ev_tkr}")
+            assert r_ev.status_code == 200
+            ev_data = r_ev.json()
+            assert "outcomes" in ev_data
+            assert "orderbook" in ev_data
+            assert "news" in ev_data
 
-    r_ap = client.post("/api/predictions/auto-pilot", json={"enabled": True, "max_stake_usd": 5.0})
-    assert r_ap.status_code == 200
+        r_ap = client.post("/api/predictions/auto-pilot", json={"enabled": True, "max_stake_usd": 5.0})
+        assert r_ap.status_code == 200
 
-    r_port = client.get("/api/predictions/portfolio")
-    assert r_port.status_code == 200
-    p_data = r_port.json()
-    assert "account" in p_data
-    assert "calibration" in p_data
-    assert "leaderboard" in p_data
+        r_port = client.get("/api/predictions/portfolio")
+        assert r_port.status_code == 200
+        p_data = r_port.json()
+        assert "account" in p_data
+        assert "calibration" in p_data
+        assert "leaderboard" in p_data
