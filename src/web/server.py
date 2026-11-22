@@ -37,6 +37,7 @@ from src.models.model_zoo import MODEL_PRESETS, ModelZooEngine
 from src.models.prediction_bot import prediction_bot_engine
 from src.models.prediction_engine import EventProbabilityModel, PredictionAlphaScanner
 from src.models.profit_engine import AlphaScanner, MarketHoursGuard, PositionRiskSizer, TrailingStopRatchet
+from src.models.regime import RegimeClassifier
 from src.models.virtual_bot import virtual_bot_engine
 from src.utils.health import health_check
 from src.utils.logger import get_logger
@@ -49,6 +50,16 @@ from src.web.auth_cookie import (
 )
 
 logger = get_logger("hfp.web")
+
+
+def _get_live_fx() -> float:
+    """Return live USD/CAD FX rate with safe 1.39 fallback."""
+    try:
+        snap = market_intel.get_macro_pulse(force_refresh=False)
+        fx = float(getattr(snap, "usd_cad", 1.39) or 1.39)
+        return fx if fx > 0.5 else 1.39
+    except Exception:
+        return 1.39
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -175,6 +186,12 @@ async def login_page(request: Request):
         pos_val = sum(float(pos["quantity"]) * float(pos["current_price"]) for pos in open_pos)
         equity = cash + pos_val
 
+        pred_acct = db_manager.get_or_create_prediction_account(p.profile_id)
+        pred_open = db_manager.get_prediction_positions(p.profile_id)
+        pred_cash = float(pred_acct.get("cash_usd", 500.0))
+        pred_pos_val = sum(float(pp["contracts"]) * float(pp["current_price_usd"]) for pp in pred_open)
+        pred_equity = round(pred_cash + pred_pos_val, 2)
+
         profiles_view.append({
             "profile_id": p.profile_id,
             "display_name": p.display_name,
@@ -185,6 +202,8 @@ async def login_page(request: Request):
             "active_timeframe": p.active_timeframe,
             "virtual_equity_cad": equity,
             "open_positions_count": len(open_pos),
+            "predict_equity_usd": pred_equity,
+            "predict_open_count": len(pred_open),
         })
 
     toronto_time = MarketHoursGuard.get_market_status(
@@ -333,7 +352,8 @@ async def get_workspace(
     exec_fee = WealthsimpleFeeSchedule.calculate_fee(exec_asset, alloc_cad, prof.ws_tier, prof.usd_account_active)
     proxy_savings = direct_fee.fee_cad_on_notional - exec_fee.fee_cad_on_notional
 
-    # 3. Ingest OHLCV bars
+    # 3. Ingest OHLCV bars and standardize pricing to USD everywhere
+    fx = _get_live_fx()
     tf = prof.active_timeframe
     lookback = "60d" if tf == "1h" else ("15d" if tf == "15m" else "1y")
     df = DataLake().pipeline(sym, timeframe=tf, lookback=lookback, include_sentiment=False, normalise=False)
@@ -344,6 +364,12 @@ async def get_workspace(
 
     if df is None or len(df) < 5:
         raise HTTPException(status_code=500, detail=f"Failed to fetch market data for {sym}")
+
+    if primary_asset.currency == "CAD":
+        df = df.copy()
+        for col in ("Open", "High", "Low", "Close"):
+            if col in df.columns:
+                df[col] = df[col].astype(float) / fx
 
     curr_price = float(df["Close"].iloc[-1])
     prev_price = float(df["Close"].iloc[-2]) if len(df) > 1 else curr_price
@@ -393,7 +419,8 @@ async def get_workspace(
         "bb_lower": [{"time": chart_times[i], "value": round(float(bb_low.iloc[i]), 4)} for i in range(len(df)) if not np.isnan(bb_low.iloc[i])],
     }
 
-    # 5. 8-Model ML/DL Quant Zoo evaluation
+    # 5. Regime classification & 8-Model ML/DL Quant Zoo evaluation
+    regime_ctx = RegimeClassifier().classify(df)
     active_models = prof.selected_models if (prof.model_preset == "CUSTOM" and prof.selected_models) else MODEL_PRESETS.get(prof.model_preset, {}).get("models")
     zoo_res = ModelZooEngine.train_and_evaluate(
         df=df,
@@ -408,7 +435,24 @@ async def get_workspace(
     cons_p50 = zoo_res["consensus_p50"]
     cons_p90 = zoo_res["consensus_p90"]
     exp_ret_pct = zoo_res["exp_return_pct"]
-    direction = "BULLISH" if exp_ret_pct > 0.15 else ("BEARISH" if exp_ret_pct < -0.15 else "NEUTRAL")
+    denoising_audit = zoo_res.get("denoising_audit", {})
+    oos_skill = float(denoising_audit.get("ensemble_oos_skill_pct", 0.0))
+
+    if regime_ctx.cash_preservation_active:
+        direction = "BEARISH" if exp_ret_pct < -0.10 else "NEUTRAL (CASH LOCK)"
+        direction_reason = f"Bear Trend Cash Lock ({regime_ctx.reason})"
+    elif oos_skill < 0.0:
+        direction = "NEUTRAL (NO EDGE)"
+        direction_reason = f"OOS Skill {oos_skill:+.1f}% vs Random Walk — directional call suppressed to prevent overfit signals"
+    elif exp_ret_pct >= 0.35:
+        direction = "BULLISH"
+        direction_reason = f"Denoised OOS Skill {oos_skill:+.1f}% · {regime_ctx.regime.value}"
+    elif exp_ret_pct <= -0.35:
+        direction = "BEARISH"
+        direction_reason = f"Denoised OOS Skill {oos_skill:+.1f}% · {regime_ctx.regime.value}"
+    else:
+        direction = "NEUTRAL"
+        direction_reason = f"Forecast move ({exp_ret_pct:+.2f}%) inside noise/spread threshold (±0.35%)"
 
     # Forecast path projection for chart
     last_t = chart_times[-1]
@@ -418,17 +462,22 @@ async def get_workspace(
         {"time": last_t + step_sec * prof.horizon_bars, "value": cons_p50},
     ]
 
-    # 6. Order ticket & Quarter-Kelly sizing
+    # 6. Order ticket & Quarter-Kelly sizing (normalized cleanly to USD display)
     acct = db_manager.get_or_create_virtual_account(prof.profile_id)
     virtual_cash = float(acct["virtual_cash_cad"])
     open_pos = db_manager.get_virtual_positions(prof.profile_id)
     pos_val = sum(float(p["quantity"]) * float(p["current_price"]) for p in open_pos)
     total_equity = virtual_cash + pos_val
 
-    # Scale ticket prices to executed asset
+    proxy_cad_note = None
     if is_proxied:
         df_exec = DataLake().pipeline(exec_asset.symbol, timeframe=tf, lookback="15d", include_sentiment=False, normalise=False)
-        exec_price = float(df_exec["Close"].iloc[-1]) if (df_exec is not None and len(df_exec)) else curr_price
+        raw_exec = float(df_exec["Close"].iloc[-1]) if (df_exec is not None and len(df_exec)) else curr_price
+        if exec_asset.currency == "CAD" and raw_exec > 0:
+            proxy_cad_note = f"WS TSX Quote: ${raw_exec:,.2f} CAD"
+            exec_price = raw_exec / fx
+        else:
+            exec_price = raw_exec
         exec_p10 = exec_price * (1.0 + (cons_p10 - curr_price) / curr_price)
         exec_p50 = exec_price * (1.0 + (cons_p50 - curr_price) / curr_price)
         exec_p90 = exec_price * (1.0 + (cons_p90 - curr_price) / curr_price)
@@ -495,14 +544,18 @@ async def get_workspace(
 
     return {
         "symbol": primary_asset.symbol,
+        "display_currency": "USD",
+        "fx_usd_cad": round(fx, 4),
         "profile": prof.to_dict(),
         "asset": primary_asset.to_dict(),
         "exec_asset": exec_asset.to_dict(),
         "is_proxied": is_proxied,
         "market_clock": market_clock,
+        "regime": regime_ctx.to_dict(),
+        "denoising_audit": denoising_audit,
         "quote": {
-            "price": curr_price,
-            "prev_price": prev_price,
+            "price": round(curr_price, 4),
+            "prev_price": round(prev_price, 4),
             "change_pct": round(change_pct, 2),
             "time": chart_times[-1],
         },
@@ -510,6 +563,7 @@ async def get_workspace(
         "indicators": indicators,
         "consensus": {
             "direction": direction,
+            "direction_reason": direction_reason,
             "exp_return_pct": exp_ret_pct,
             "p10": cons_p10,
             "p50": cons_p50,
@@ -531,7 +585,8 @@ async def get_workspace(
             "quarter_kelly_cad": round(sizer_res.recommended_cad, 2),
             "dollar_risk_at_stop": round(sizer_res.dollar_risk_at_stop, 2),
             "fee_estimate": exec_fee.to_dict(),
-            "proxy_savings_badge": f"Saves ~${proxy_savings:,.2f} CAD round-trip vs direct trading" if proxy_savings > 0.05 else None,
+            "proxy_cad_note": proxy_cad_note,
+            "proxy_savings_badge": f"Saves ~${(proxy_savings / fx):,.2f} USD round-trip vs direct trading" if proxy_savings > 0.05 else None,
         },
         "virtual_bot": {
             "is_armed": bool(acct.get("is_armed", 1)),
@@ -551,11 +606,23 @@ async def get_scanner_opportunities(
     force: bool = False,
     prof: UserProfile = Depends(get_current_profile),
 ):
+    fx = _get_live_fx()
     opps = AlphaScanner.scan_opportunities(
         force_refresh=force,
         ws_tier=prof.ws_tier,
         usd_account_active=prof.usd_account_active,
     )
+
+    opp_dicts = []
+    for o in opps:
+        od = o.to_dict()
+        asset_meta = WealthsimpleCatalog.resolve_asset(o.symbol)
+        if asset_meta.currency == "CAD":
+            od["current_price"] = round(float(o.current_price) / fx, 2)
+            od["target_price"] = round(float(o.target_price) / fx, 2)
+            od["p10_stop"] = round(float(o.p10_stop) / fx, 2)
+        od["currency"] = "USD"
+        opp_dicts.append(od)
 
     intel = MarketIntelligenceEngine()
     intel_rep = intel.get_asset_intelligence(prof.active_symbol)
@@ -565,7 +632,9 @@ async def get_scanner_opportunities(
     ]
 
     return {
-        "opportunities": [o.to_dict() for o in opps],
+        "opportunities": opp_dicts,
+        "display_currency": "USD",
+        "fx_usd_cad": round(fx, 4),
         "news_articles": articles,
         "news_sentiment": intel_rep.sentiment_score,
         "dominant_catalyst": intel_rep.dominant_catalyst,

@@ -30,11 +30,10 @@ logger = get_logger("hfp.profit_engine")
 TORONTO_TZ = ZoneInfo("America/Toronto")
 
 TOP_WEALTHSIMPLE_BASKET = [
-    "SHOP.TO", "RY.TO", "CLS.TO", "CCO.TO", "ENB.TO",
-    "VFV.TO", "XQQ.TO",
-    "NVDA.NE", "AAPL.NE", "TSLA.NE", "MSFT.NE", "AMD.NE",
-    "BTC-CAD", "ETH-CAD", "SOL-CAD",
-    "QQQ", "SPY",
+    "BTC-USD", "ETH-USD", "SOL-USD",
+    "SPY", "QQQ", "IBIT",
+    "NVDA", "AAPL", "MSFT", "TSLA", "AMD", "PLTR", "COIN",
+    "SHOP.TO", "RY.TO", "CLS.TO", "VFV.TO",
 ]
 
 

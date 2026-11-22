@@ -137,7 +137,7 @@ FLAGSHIP_SERIES: List[Dict[str, Any]] = [
         "label": "Bitcoin Price Range",
         "ui_category": "FINANCIALS",
         "domain": "FINANCIALS",
-        "underlying_yf_symbol": "BTC-CAD",
+        "underlying_yf_symbol": "BTC-USD",
         "keywords": ["bitcoin", "btc", "crypto", "etf"],
     },
     {
@@ -145,7 +145,7 @@ FLAGSHIP_SERIES: List[Dict[str, Any]] = [
         "label": "Ethereum Price Range",
         "ui_category": "FINANCIALS",
         "domain": "FINANCIALS",
-        "underlying_yf_symbol": "ETH-CAD",
+        "underlying_yf_symbol": "ETH-USD",
         "keywords": ["ethereum", "eth", "crypto"],
     },
     # Climate & Weather

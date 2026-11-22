@@ -518,7 +518,8 @@ function recalcPredictTicket() {
   document.getElementById('pred-calc-contracts').innerText = contracts.toFixed(2);
   document.getElementById('pred-calc-fee').innerText = `$${fee.toFixed(2)} USD`;
   document.getElementById('pred-calc-cost-usd').innerText = `$${totalCost.toFixed(2)} USD`;
-  document.getElementById('pred-calc-cost-cad').innerText = `($${totalCad.toFixed(2)} CAD)`;
+  const cadEl = document.getElementById('pred-calc-cost-cad');
+  if (cadEl) cadEl.innerText = `($${totalCad.toFixed(2)} CAD)`;
   document.getElementById('pred-calc-profit').innerText = `+$${netProfit.toFixed(2)} (+${roiPct.toFixed(0)}%)`;
   document.getElementById('pred-calc-breakeven').innerText = `${Math.min(99.9, breakeven).toFixed(1)}%`;
 
@@ -619,7 +620,7 @@ function copyPredictTicket() {
     `Event: ${predSelectedMarket.event_title}`,
     `Outcome: ${predSelectedMarket.outcome_label}`,
     `Action: BUY ${predSelectedSide} @ ${priceCents.toFixed(1)}c`,
-    `Stake: $${stake.toFixed(2)} USD (~$${(stake * predCurrentFx).toFixed(2)} CAD)`,
+    `Stake: $${stake.toFixed(2)} USD`,
     `AI Fair Prob: ${predSelectedMarket.ai_fair_pct.toFixed(1)}% (Mkt ${predSelectedMarket.market_prob_pct.toFixed(1)}%)`,
     `Net EV after fee: ${predSelectedMarket.best_ev_pct >= 0 ? '+' : ''}${predSelectedMarket.best_ev_pct.toFixed(2)}%`,
   ].join('\n');
@@ -672,6 +673,11 @@ async function loadPredictionPortfolio() {
 
     document.getElementById('pred-sandbox-equity').innerText = `$${Number(acct.total_equity_usd || 500).toFixed(2)} USD`;
     document.getElementById('pred-sandbox-cash').innerText = `$${Number(acct.cash_usd || 500).toFixed(2)}`;
+    const activeTab = document.querySelector('.tab-btn.active');
+    const hdrEq = document.getElementById('user-badge-equity');
+    if (hdrEq && activeTab && activeTab.dataset.tab === 'predictions') {
+      hdrEq.innerText = `$${Number(acct.total_equity_usd || 500).toFixed(2)} USD Predict`;
+    }
     const retPct = Number(acct.net_return_pct || 0);
     const retEl = document.getElementById('pred-sandbox-ret');
     retEl.innerText = `${retPct >= 0 ? '+' : ''}${retPct.toFixed(1)}%`;

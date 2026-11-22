@@ -225,6 +225,31 @@ CURATED_WS_ASSETS: Dict[str, WealthsimpleAsset] = {
     "TLT": WealthsimpleAsset("TLT", "TLT", "iShares 20+ Year Treasury Bond", "US_ETF", "USD", "NASDAQ", False, True),
     "IBIT": WealthsimpleAsset("IBIT", "IBIT", "iShares Bitcoin Trust ETF", "US_ETF", "USD", "NASDAQ", False, True, alt_cad_proxy="BTCC.TO"),
 
+    # ─── CRYPTO USD BENCHMARK PAIRS (Default Charting Currency) ──────────────
+    "BTC-USD": WealthsimpleAsset("BTC-USD", "BTC", "Bitcoin (USD)", "CRYPTO", "USD", "WS_CRYPTO", True, True, alt_cad_proxy="BTCC.TO"),
+    "ETH-USD": WealthsimpleAsset("ETH-USD", "ETH", "Ethereum (USD)", "CRYPTO", "USD", "WS_CRYPTO", True, True, alt_cad_proxy="ETHX-B.TO"),
+    "SOL-USD": WealthsimpleAsset("SOL-USD", "SOL", "Solana (USD)", "CRYPTO", "USD", "WS_CRYPTO", True, True, alt_cad_proxy="SOLQ.TO"),
+    "XRP-USD": WealthsimpleAsset("XRP-USD", "XRP", "XRP (USD)", "CRYPTO", "USD", "WS_CRYPTO", True, True),
+    "DOGE-USD": WealthsimpleAsset("DOGE-USD", "DOGE", "Dogecoin (USD)", "CRYPTO", "USD", "WS_CRYPTO", True, True),
+    "ADA-USD": WealthsimpleAsset("ADA-USD", "ADA", "Cardano (USD)", "CRYPTO", "USD", "WS_CRYPTO", True, True),
+    "AVAX-USD": WealthsimpleAsset("AVAX-USD", "AVAX", "Avalanche (USD)", "CRYPTO", "USD", "WS_CRYPTO", True, True),
+    "LINK-USD": WealthsimpleAsset("LINK-USD", "LINK", "Chainlink (USD)", "CRYPTO", "USD", "WS_CRYPTO", True, True),
+    "DOT-USD": WealthsimpleAsset("DOT-USD", "DOT", "Polkadot (USD)", "CRYPTO", "USD", "WS_CRYPTO", True, True),
+    "SUI-USD": WealthsimpleAsset("SUI-USD", "SUI", "Sui (USD)", "CRYPTO", "USD", "WS_CRYPTO", True, True),
+    "LTC-USD": WealthsimpleAsset("LTC-USD", "LTC", "Litecoin (USD)", "CRYPTO", "USD", "WS_CRYPTO", True, True),
+    "BCH-USD": WealthsimpleAsset("BCH-USD", "BCH", "Bitcoin Cash (USD)", "CRYPTO", "USD", "WS_CRYPTO", True, True),
+    "NEAR-USD": WealthsimpleAsset("NEAR-USD", "NEAR", "NEAR Protocol (USD)", "CRYPTO", "USD", "WS_CRYPTO", True, True),
+    "UNI-USD": WealthsimpleAsset("UNI-USD", "UNI", "Uniswap (USD)", "CRYPTO", "USD", "WS_CRYPTO", True, True),
+    "APT-USD": WealthsimpleAsset("APT-USD", "APT", "Aptos (USD)", "CRYPTO", "USD", "WS_CRYPTO", True, True),
+    "PEPE-USD": WealthsimpleAsset("PEPE-USD", "PEPE", "Pepe (USD)", "CRYPTO", "USD", "WS_CRYPTO", True, True),
+    "SHIB-USD": WealthsimpleAsset("SHIB-USD", "SHIB", "Shiba Inu (USD)", "CRYPTO", "USD", "WS_CRYPTO", True, True),
+    "RENDER-USD": WealthsimpleAsset("RENDER-USD", "RENDER", "Render (USD)", "CRYPTO", "USD", "WS_CRYPTO", True, True),
+    "FET-USD": WealthsimpleAsset("FET-USD", "FET", "Artificial Superintelligence Alliance (USD)", "CRYPTO", "USD", "WS_CRYPTO", True, True),
+    "ARB-USD": WealthsimpleAsset("ARB-USD", "ARB", "Arbitrum (USD)", "CRYPTO", "USD", "WS_CRYPTO", True, True),
+    "OP-USD": WealthsimpleAsset("OP-USD", "OP", "Optimism (USD)", "CRYPTO", "USD", "WS_CRYPTO", True, True),
+    "ATOM-USD": WealthsimpleAsset("ATOM-USD", "ATOM", "Cosmos (USD)", "CRYPTO", "USD", "WS_CRYPTO", True, True),
+    "AAVE-USD": WealthsimpleAsset("AAVE-USD", "AAVE", "Aave (USD)", "CRYPTO", "USD", "WS_CRYPTO", True, True),
+
     # ─── WEALTHSIMPLE CRYPTO CAD PAIRS (~35+) ──────────────────────────────
     "BTC-CAD": WealthsimpleAsset("BTC-CAD", "BTC", "Bitcoin (CAD)", "CRYPTO", "CAD", "WS_CRYPTO", True, True, alt_cad_proxy="BTCC.TO"),
     "ETH-CAD": WealthsimpleAsset("ETH-CAD", "ETH", "Ethereum (CAD)", "CRYPTO", "CAD", "WS_CRYPTO", True, True, alt_cad_proxy="ETHX-B.TO"),
@@ -270,12 +295,14 @@ class WealthsimpleCatalog:
 
     @classmethod
     def get_asset(cls, symbol: str) -> Optional[WealthsimpleAsset]:
-        """Lookup an asset from curated registry."""
+        """Lookup an asset from curated registry (USD preferred for crypto)."""
         norm = symbol.strip().upper()
         # Direct hit
         if norm in CURATED_WS_ASSETS:
             return CURATED_WS_ASSETS[norm]
-        # Check display symbol or USD version
+        # Check USD crypto first, then TSX, then CAD crypto
+        if norm + "-USD" in CURATED_WS_ASSETS:
+            return CURATED_WS_ASSETS[norm + "-USD"]
         if norm + ".TO" in CURATED_WS_ASSETS:
             return CURATED_WS_ASSETS[norm + ".TO"]
         if norm + "-CAD" in CURATED_WS_ASSETS:
@@ -292,16 +319,16 @@ class WealthsimpleCatalog:
             return hit
 
         sym = symbol.strip().upper()
-        # Canonical Crypto Aliases (resolve BTC-USD/ETH-USD to Wealthsimple CAD pairs with TSX proxies)
+        # Canonical Crypto Aliases (USD standard across charts & analysis)
         if sym in ("BTC", "BTC-USD", "BTC/USD"):
-            if "BTC-CAD" in CURATED_WS_ASSETS:
-                return CURATED_WS_ASSETS["BTC-CAD"]
+            if "BTC-USD" in CURATED_WS_ASSETS:
+                return CURATED_WS_ASSETS["BTC-USD"]
         if sym in ("ETH", "ETH-USD", "ETH/USD"):
-            if "ETH-CAD" in CURATED_WS_ASSETS:
-                return CURATED_WS_ASSETS["ETH-CAD"]
+            if "ETH-USD" in CURATED_WS_ASSETS:
+                return CURATED_WS_ASSETS["ETH-USD"]
         if sym in ("SOL", "SOL-USD", "SOL/USD"):
-            if "SOL-CAD" in CURATED_WS_ASSETS:
-                return CURATED_WS_ASSETS["SOL-CAD"]
+            if "SOL-USD" in CURATED_WS_ASSETS:
+                return CURATED_WS_ASSETS["SOL-USD"]
 
         if sym.endswith(".TO") or sym.endswith(".V"):
             cat = "TSX_STOCK"
@@ -444,14 +471,14 @@ class WealthsimpleCatalog:
                             fractional_supported=True,
                         ))
                     elif quote_type == "CRYPTOCURRENCY" or raw_exch in ("CCC", "CRYPTO"):
-                        cad_sym = raw_sym if raw_sym.endswith("-CAD") else f"{raw_sym.replace('-USD', '')}-CAD"
-                        disp = cad_sym.replace("-CAD", "")
+                        usd_sym = raw_sym if raw_sym.endswith("-USD") else f"{raw_sym.replace('-CAD', '')}-USD"
+                        disp = usd_sym.replace("-USD", "")
                         live_results.append(WealthsimpleAsset(
-                            symbol=cad_sym,
+                            symbol=usd_sym,
                             ws_display_symbol=disp,
-                            name=f"{short_name} (CAD)",
+                            name=f"{short_name} (USD)",
                             category="CRYPTO",
-                            currency="CAD",
+                            currency="USD",
                             exchange="WS_CRYPTO",
                             is_24_7=True,
                             fractional_supported=True,

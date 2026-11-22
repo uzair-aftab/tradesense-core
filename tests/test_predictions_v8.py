@@ -271,3 +271,91 @@ def test_prediction_fastapi_endpoints():
         assert "account" in p_data
         assert "calibration" in p_data
         assert "leaderboard" in p_data
+
+
+def test_causal_denoising_zero_lookahead_and_overfit_audit():
+    """Verify causal MAD+Kalman denoising has bit-for-bit prefix invariance and outputs overfit audits."""
+    import numpy as np
+    import pandas as pd
+    from src.data.ws_catalog import WealthsimpleCatalog
+    from src.models.model_zoo import (
+        ModelZooEngine,
+        build_ml_feature_matrix,
+        causal_denoise_price_series,
+    )
+
+    rng = np.random.default_rng(7)
+    n = 140
+    idx = pd.date_range("2026-06-01", periods=n, freq="1h")
+    base_ret = rng.normal(0.0005, 0.008, size=n)
+    base_ret[35] += 0.09  # Inject outlier spike to verify MAD clipping
+    base_ret[70] -= 0.08
+    close = pd.Series(50000.0 * np.exp(np.cumsum(base_ret)), index=idx)
+
+    # 1. Bit-for-bit causal prefix invariance when mutating future bars
+    split = 100
+    den1, audit1 = causal_denoise_price_series(close)
+    close_mut = close.copy()
+    close_mut.iloc[split:] = close_mut.iloc[split:] * 3.5 + 10000.0
+    den2, _ = causal_denoise_price_series(close_mut)
+
+    assert np.array_equal(den1.iloc[:split].values, den2.iloc[:split].values), "Future mutation leaked into prefix!"
+    assert audit1["zero_lookahead"] is True
+    assert audit1["spikes_clipped"] >= 2
+    assert audit1["noise_reduction_pct"] > 0.0
+
+    # 2. Prefix invariance of full feature matrix
+    df1 = pd.DataFrame({
+        "Open": close.values * 0.999,
+        "High": close.values * 1.004,
+        "Low": close.values * 0.996,
+        "Close": close.values,
+        "Volume": np.full(n, 1000.0),
+    }, index=idx)
+    df2 = df1.copy()
+    df2.iloc[split:, df2.columns.get_indexer(["Open", "High", "Low", "Close"])] *= 4.0
+
+    f1, cols = build_ml_feature_matrix(df1, horizon_bars=5, is_crypto=True)
+    f2, _ = build_ml_feature_matrix(df2, horizon_bars=5, is_crypto=True)
+    assert np.array_equal(f1[cols].iloc[:split].values, f2[cols].iloc[:split].values)
+
+    # 3. ModelZoo overfit audit & embargo verification
+    asset = WealthsimpleCatalog.resolve_asset("BTC-USD")
+    res = ModelZooEngine.train_and_evaluate(df1, asset, horizon_bars=5, force_retrain=True)
+    audit = res.get("denoising_audit", {})
+    assert audit.get("embargo_gap_bars") == 5
+    assert audit.get("overfit_ratio", 0.0) > 0.0
+    for m in res.get("all_model_results", []):
+        assert "train_mape_pct" in m
+        assert "overfit_ratio" in m
+        assert "skill_gated" in m
+
+
+def test_usd_default_and_regime_skill_gating():
+    """Verify USD catalog resolution, WS Predict default tab HTML, and Regime+Skill gating payload."""
+    from src.data.ws_catalog import WealthsimpleCatalog
+
+    btc = WealthsimpleCatalog.resolve_asset("BTC")
+    assert btc.symbol == "BTC-USD"
+    assert btc.currency == "USD"
+
+    with TestClient(app) as client:
+        res_auth = client.post("/api/auth/select-profile", json={"profile_id": "waleed"})
+        assert res_auth.status_code == 200
+        token = res_auth.cookies.get(SESSION_COOKIE_NAME)
+        client.cookies.set(SESSION_COOKIE_NAME, token)
+
+        r_home = client.get("/")
+        assert r_home.status_code == 200
+        html = r_home.text
+        assert 'id="tab-predictions" class="tab-pane' in html
+        assert 'id="tab-predictions" class="tab-pane hidden' not in html
+        assert "PAPER SANDBOX ONLY" in html.upper()
+
+        r_ws = client.get("/api/workspace?retrain=false")
+        assert r_ws.status_code == 200
+        ws = r_ws.json()
+        assert ws["display_currency"] == "USD"
+        assert "denoising_audit" in ws
+        assert "regime" in ws
+        assert "direction_reason" in ws["consensus"]

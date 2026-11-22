@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TradeSense — Wealthsimple AI Alpha &amp; Execution Terminal</title>
+  <title>TradeSense v8.1 — Wealthsimple Predict &amp; Quant Sandbox</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- TradingView Lightweight Charts v4 -->
   <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
@@ -38,7 +38,7 @@
             <input
               type="text"
               id="asset-search-input"
-              placeholder="Search TSX, US, CDR, Crypto (e.g. SHOP, BTC, NVDA)..."
+              placeholder="Search BTC-USD, SPY, NVDA, SHOP.TO..."
               class="w-full bg-transparent text-xs text-white placeholder-slate-500 focus:outline-none uppercase font-mono"
               autocomplete="off"
             >
@@ -72,12 +72,12 @@
         </button>
 
         <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs">
-          <div id="user-badge-initials" class="w-5 h-5 rounded-full flex items-center justify-center font-bold text-[10px] text-slate-950 bg-sky-400">
-            UZ
+          <div id="user-badge-initials" class="w-5 h-5 rounded-full flex items-center justify-center font-bold text-[10px] text-slate-950" style="background-color: {{ profile.accent_color }};">
+            {{ profile.avatar_initials }}
           </div>
-          <span id="user-badge-name" class="font-semibold text-white">Uzair</span>
+          <span id="user-badge-name" class="font-semibold text-white">{{ profile.display_name }}</span>
           <span class="text-slate-600">·</span>
-          <span id="user-badge-equity" class="font-mono text-slate-300 font-bold">$10,000.00 CAD</span>
+          <span id="user-badge-equity" class="font-mono text-emerald-300 font-bold">$500.00 USD Predict</span>
         </div>
 
         <button
@@ -93,21 +93,32 @@
     </div>
   </header>
 
-  <!-- 4 Navigation Tabs (pr-plan style) -->
+  <!-- 4 Navigation Tabs (WS Predict Primary) -->
   <div class="border-b border-slate-800/80 bg-slate-950/60 overflow-x-auto">
     <div class="max-w-[1720px] mx-auto px-4 sm:px-6 flex items-center gap-1 whitespace-nowrap">
-      <button type="button" class="tab-btn active" data-tab="terminal">
-        1. Terminal &amp; Execution
+      <button type="button" class="tab-btn active" data-tab="predictions">
+        1. WS Predict (Prediction Markets)
+      </button>
+      <button type="button" class="tab-btn" data-tab="terminal">
+        2. Market Terminal (USD)
       </button>
       <button type="button" class="tab-btn" data-tab="model-lab">
-        2. Model Lab &amp; Alpha Scanner
+        3. Quant Lab &amp; Denoising
       </button>
       <button type="button" class="tab-btn" data-tab="portfolios">
-        3. Portfolios &amp; Leaderboard
+        4. Portfolios &amp; Paper Proof
       </button>
-      <button type="button" class="tab-btn" data-tab="predictions">
-        4. Prediction Markets (WS Predict)
-      </button>
+    </div>
+  </div>
+
+  <!-- Permanent Simulation Clarity Bar -->
+  <div class="border-b border-slate-800/60 bg-slate-900/70">
+    <div class="max-w-[1720px] mx-auto px-4 sm:px-6 py-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-amber-400 shrink-0"></span>
+        <span class="font-bold text-amber-300 tracking-wide uppercase">Paper Sandbox Only — Not Connected to Wealthsimple API</span>
+      </div>
+      <span class="text-slate-400">All bots trade virtual USD to prove statistical edge (Brier Score &amp; OOS P&amp;L). Wealthsimple has no public trading API — real orders are manual copy-paste only.</span>
     </div>
   </div>
 
@@ -115,33 +126,34 @@
   <main class="flex-1 max-w-[1720px] w-full mx-auto p-4 sm:p-6 space-y-6">
 
     <!-- ═════════════════════════════════════════════════════════════════════ -->
-    <!-- TAB 1: TERMINAL & EXECUTION                                          -->
+    <!-- TAB 2: MARKET TERMINAL (USD)                                         -->
     <!-- ═════════════════════════════════════════════════════════════════════ -->
-    <div id="tab-terminal" class="tab-pane space-y-5">
+    <div id="tab-terminal" class="tab-pane hidden space-y-5">
       
       <!-- Top 4-Stat Strip -->
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
         
         <!-- Stat 1: Live Price -->
         <div class="card p-4">
-          <div class="stat-label">Live Price · <span id="stat-symbol">BTC-CAD</span></div>
-          <div class="stat-value text-white" id="stat-price">$108,183.89 CAD</div>
+          <div class="stat-label">Live Price (USD) · <span id="stat-symbol">BTC-USD</span></div>
+          <div class="stat-value text-white" id="stat-price">Loading USD...</div>
           <div class="stat-sub flex items-center gap-2">
-            <span id="stat-change" class="font-mono font-semibold text-emerald-400">+0.59%</span>
+            <span id="stat-change" class="font-mono font-semibold text-slate-400">0.00%</span>
             <span class="text-slate-600">·</span>
-            <span id="stat-market-session" class="text-slate-400 text-[11px]">Crypto 24/7 Open</span>
+            <span id="stat-market-session" class="text-slate-400 text-[11px]">Evaluating...</span>
           </div>
         </div>
 
         <!-- Stat 2: Quant Zoo Consensus -->
         <div class="card p-4">
-          <div class="stat-label">Quant Zoo Consensus (<span id="stat-horizon">5B</span>)</div>
+          <div class="stat-label">Denoised Quant Consensus (<span id="stat-horizon">5B</span>) · <span id="stat-consensus-regime" class="text-sky-400 font-mono">CALIBRATING</span></div>
           <div class="stat-value" id="stat-consensus-dir">
-            <span class="text-emerald-400">BULLISH</span>
+            <span class="text-slate-400">CALIBRATING</span>
           </div>
           <div class="stat-sub font-mono">
-            Target: <span id="stat-consensus-p50" class="text-slate-200 font-bold">$111,200</span>
-            <span class="text-slate-500 text-[11px] block">Range: <span id="stat-consensus-p10">$106,400</span> – <span id="stat-consensus-p90">$114,800</span></span>
+            Target: <span id="stat-consensus-p50" class="text-slate-200 font-bold">—</span>
+            <span class="text-slate-500 text-[11px] block">Range: <span id="stat-consensus-p10">—</span> – <span id="stat-consensus-p90">—</span></span>
+            <span id="stat-consensus-reason" class="text-slate-400 font-sans text-[10px] block truncate mt-0.5">Causal denoising + OOS skill gate active</span>
           </div>
         </div>
 
@@ -149,22 +161,22 @@
         <div class="card p-4">
           <div class="stat-label">Pair Proof-of-Edge (60B)</div>
           <div class="stat-value text-sm flex items-center gap-2 mt-1" id="stat-edge-badge">
-            <span class="px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800 text-xs font-bold">
-              🟢 Proven Edge
+            <span class="px-2 py-0.5 rounded bg-slate-900 text-slate-300 border border-slate-700 text-xs font-bold">
+              Calibrating Edge
             </span>
           </div>
           <div class="stat-sub text-[11px]" id="stat-edge-details">
-            <span class="font-mono text-emerald-400 font-bold" id="stat-edge-winrate">66.7% Win</span> · 
-            PF <span class="font-mono text-slate-200" id="stat-edge-pf">2.41</span> · 
-            Net <span class="font-mono text-emerald-400" id="stat-edge-net">+4.8%</span> after WS fees
+            <span class="font-mono text-slate-300 font-bold" id="stat-edge-winrate">0.0% Win</span> · 
+            PF <span class="font-mono text-slate-200" id="stat-edge-pf">1.00</span> · 
+            Net <span class="font-mono text-slate-300" id="stat-edge-net">0.0%</span> after fees
           </div>
         </div>
 
         <!-- Stat 4: Virtual Bot Equity -->
         <div class="card p-4 flex items-center justify-between">
           <div>
-            <div class="stat-label">Virtual Equity · <span id="stat-user-name">Uzair</span></div>
-            <div class="stat-value text-white" id="stat-equity-cad">$10,000.00</div>
+            <div class="stat-label">Paper Swing Sandbox · <span id="stat-user-name">{{ profile.display_name }}</span></div>
+            <div class="stat-value text-white" id="stat-equity-cad">$10,000.00 USD</div>
             <div class="stat-sub text-[11px]">
               Cash: <span class="font-mono text-slate-300" id="stat-cash-cad">$10,000.00</span> · 
               <span id="stat-bot-active-badge" class="text-sky-400 font-semibold">Armed ●</span>
@@ -324,14 +336,17 @@
         <!-- Right 4 Columns: Virtual Bot & Wealthsimple Order Ticket -->
         <div class="lg:col-span-4 space-y-4">
           
-          <!-- Card 1: Virtual Bot & Paper Proof -->
+          <!-- Card 1: Paper Swing Bot (Simulated USD) -->
           <div class="card p-4 space-y-3">
             <div class="flex items-center justify-between pb-2 border-b border-slate-800">
-              <div class="flex items-center gap-2">
-                <div class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></div>
-                <span class="font-bold text-xs text-white uppercase tracking-wider">Virtual Bot Execution</span>
+              <div>
+                <div class="flex items-center gap-2">
+                  <div class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></div>
+                  <span class="font-bold text-xs text-white uppercase tracking-wider">Paper Swing Bot (Simulated USD)</span>
+                </div>
+                <span class="text-[10px] text-slate-400 block mt-0.5">Regime &amp; OOS skill-gated simulator — never touches real Wealthsimple funds</span>
               </div>
-              <span id="bot-heartbeat-text" class="text-[10px] font-mono text-slate-400">Heartbeat: 60s active</span>
+              <span id="bot-heartbeat-text" class="text-[10px] font-mono text-slate-400 shrink-0">60s Cycle</span>
             </div>
 
             <!-- Open Position Display OR Paper Buy Button -->
@@ -343,45 +358,45 @@
             <div class="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800/60 text-xs font-mono">
               <div class="p-2 rounded bg-slate-950/60 border border-slate-800/80">
                 <span class="text-slate-500 text-[10px] uppercase block">Walk-Forward Trades</span>
-                <span id="mini-wf-trades" class="font-bold text-slate-200">6 Trades</span>
+                <span id="mini-wf-trades" class="font-bold text-slate-200">0 Trades</span>
               </div>
               <div class="p-2 rounded bg-slate-950/60 border border-slate-800/80">
                 <span class="text-slate-500 text-[10px] uppercase block">Win Rate</span>
-                <span id="mini-wf-winrate" class="font-bold text-emerald-400">66.7%</span>
+                <span id="mini-wf-winrate" class="font-bold text-slate-200">0.0%</span>
               </div>
               <div class="p-2 rounded bg-slate-950/60 border border-slate-800/80">
                 <span class="text-slate-500 text-[10px] uppercase block">Profit Factor</span>
-                <span id="mini-wf-pf" class="font-bold text-slate-200">2.41</span>
+                <span id="mini-wf-pf" class="font-bold text-slate-200">1.00</span>
               </div>
               <div class="p-2 rounded bg-slate-950/60 border border-slate-800/80">
-                <span class="text-slate-500 text-[10px] uppercase block">WS Fees Deducted</span>
-                <span id="mini-wf-fees" class="font-bold text-rose-400">$3.80 CAD</span>
+                <span class="text-slate-500 text-[10px] uppercase block">Simulated Fees</span>
+                <span id="mini-wf-fees" class="font-bold text-rose-400">$0.00 USD</span>
               </div>
             </div>
           </div>
 
-          <!-- Card 2: Wealthsimple Order Ticket & 1-Click Clipboard -->
+          <!-- Card 2: Manual Reference Ticket (USD) -->
           <div class="card p-4 space-y-3.5">
             <div class="flex items-center justify-between pb-2 border-b border-slate-800">
-              <span class="font-bold text-xs text-white uppercase tracking-wider">Wealthsimple Order Ticket</span>
+              <span class="font-bold text-xs text-white uppercase tracking-wider">Swing Reference Ticket (USD)</span>
               <span id="ticket-ws-tier-badge" class="text-[10px] font-semibold px-2 py-0.5 rounded bg-sky-950 text-sky-300 border border-sky-800">
-                Core Tier ($0 Comm)
+                WS Core
               </span>
             </div>
 
-            <!-- Optimal CAD Proxy Switch -->
+            <!-- Optimal CAD Proxy Switch (Hidden unless toggled / Canadian TSX route) -->
             <div id="proxy-route-banner" class="p-2.5 rounded-lg bg-sky-950/40 border border-sky-800/80 flex items-center justify-between text-xs">
               <div>
                 <div class="font-semibold text-sky-200 flex items-center gap-1.5">
-                  <span id="proxy-switch-label">Route via BTCC.TO</span>
+                  <span id="proxy-switch-label">Optional WS TFSA Proxy: BTCC.TO</span>
                   <span class="text-[10px] px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">TFSA 0% Tax</span>
                 </div>
                 <div id="proxy-savings-text" class="text-[11px] text-sky-400/80 mt-0.5">
-                  Saves ~$20.10 CAD round-trip fees vs raw crypto
+                  Optional low-fee Canadian ETF route
                 </div>
               </div>
               <label class="relative inline-flex items-center cursor-pointer shrink-0 ml-2">
-                <input type="checkbox" id="proxy-route-checkbox" checked onchange="toggleProxyRoute(this.checked)" class="sr-only peer">
+                <input type="checkbox" id="proxy-route-checkbox" onchange="toggleProxyRoute(this.checked)" class="sr-only peer">
                 <div class="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-500"></div>
               </label>
             </div>
@@ -389,7 +404,7 @@
             <!-- Capital Allocation + Quarter-Kelly -->
             <div class="space-y-1.5">
               <div class="flex items-center justify-between text-xs text-slate-400">
-                <span>Capital Allocation ($ CAD)</span>
+                <span>Capital Allocation ($ USD)</span>
                 <button
                   type="button"
                   onclick="applyQuarterKelly()"
@@ -499,11 +514,10 @@
 
             <!-- Scanner Category Filters -->
             <div class="flex items-center gap-1.5 flex-wrap text-xs">
-              <button type="button" class="pill-btn scan-filter-btn active" data-cat="ALL">All (16)</button>
-              <button type="button" class="pill-btn scan-filter-btn" data-cat="CRYPTO">Crypto</button>
-              <button type="button" class="pill-btn scan-filter-btn" data-cat="TSX_STOCK">TSX Stocks</button>
-              <button type="button" class="pill-btn scan-filter-btn" data-cat="NEO_CDR">NEO CDRs</button>
-              <button type="button" class="pill-btn scan-filter-btn" data-cat="CANADIAN_ETF">Canadian ETFs</button>
+              <button type="button" class="pill-btn scan-filter-btn active" data-cat="ALL">All (17)</button>
+              <button type="button" class="pill-btn scan-filter-btn" data-cat="CRYPTO">Crypto (USD)</button>
+              <button type="button" class="pill-btn scan-filter-btn" data-cat="US">US Stocks &amp; ETFs</button>
+              <button type="button" class="pill-btn scan-filter-btn" data-cat="TSX">TSX</button>
             </div>
 
             <!-- Scanner Table -->
@@ -527,15 +541,47 @@
           </div>
         </div>
 
-        <!-- Right 6 Columns: 8-Model Benchmark Table & News Wire -->
+        <!-- Right 6 Columns: Signal Denoising Audit, 8-Model Benchmark & News Wire -->
         <div class="lg:col-span-6 space-y-4">
-          
+
+          <!-- Signal Denoising & Anti-Overfit Pipeline Audit -->
+          <div class="card p-4 space-y-3">
+            <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+              <div>
+                <span class="font-bold text-xs text-white uppercase tracking-wider block">Signal Denoising &amp; Anti-Overfit Audit</span>
+                <span id="denoise-method" class="text-[11px] text-slate-400">Causal MAD Despiking (3.5σ) + Adaptive 1D Kalman Filter (Zero Lookahead)</span>
+              </div>
+              <span id="denoise-overfit-badge" class="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 font-mono">
+                CALIBRATING
+              </span>
+            </div>
+
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
+              <div class="p-2.5 rounded bg-slate-950 border border-slate-800">
+                <span class="text-slate-500 text-[10px] uppercase block font-sans">Noise Removed / SNR</span>
+                <span id="denoise-noise-pct" class="font-bold text-sky-400">—</span>
+              </div>
+              <div class="p-2.5 rounded bg-slate-950 border border-slate-800">
+                <span class="text-slate-500 text-[10px] uppercase block font-sans">Spikes Clipped / Gap</span>
+                <span id="denoise-spikes" class="font-bold text-slate-200">—</span>
+              </div>
+              <div class="p-2.5 rounded bg-slate-950 border border-slate-800">
+                <span class="text-slate-500 text-[10px] uppercase block font-sans">Train vs Val Ratio</span>
+                <span id="denoise-overfit-ratio" class="font-bold text-slate-200">—</span>
+              </div>
+              <div class="p-2.5 rounded bg-slate-950 border border-slate-800">
+                <span class="text-slate-500 text-[10px] uppercase block font-sans">OOS Skill / Gated</span>
+                <span id="denoise-oos-skill" class="font-bold text-emerald-400">—</span>
+              </div>
+            </div>
+          </div>
+
           <!-- 8-Model ML/DL Benchmark -->
           <div class="card p-4 space-y-3">
             <div class="flex items-center justify-between pb-2 border-b border-slate-800">
               <div>
                 <span class="font-bold text-xs text-white uppercase tracking-wider block">8-Model ML/DL Quant Benchmark</span>
-                <span class="text-[11px] text-slate-400">Out-of-sample walk-forward validation for <strong class="text-white" id="benchmark-active-symbol">BTC-CAD</strong></span>
+                <span class="text-[11px] text-slate-400">Embargoed out-of-sample validation for <strong class="text-white" id="benchmark-active-symbol">BTC-USD</strong></span>
               </div>
               <button
                 type="button"
@@ -551,10 +597,12 @@
                 <thead>
                   <tr class="border-b border-slate-800 text-[10px] text-slate-500 uppercase font-semibold">
                     <th class="py-2">Model Family</th>
+                    <th class="py-2 text-right">Train</th>
                     <th class="py-2 text-right">Val MAPE</th>
-                    <th class="py-2 text-right">vs. Naive</th>
+                    <th class="py-2 text-right">Overfit</th>
+                    <th class="py-2 text-right">OOS Skill</th>
                     <th class="py-2 text-right">Hit Rate</th>
-                    <th class="py-2 text-right">P50 Target</th>
+                    <th class="py-2 text-right">P50 (USD)</th>
                     <th class="py-2 text-right">Weight</th>
                   </tr>
                 </thead>
@@ -585,16 +633,52 @@
     </div>
 
     <!-- ═════════════════════════════════════════════════════════════════════ -->
-    <!-- TAB 3: PORTFOLIOS & LEADERBOARD                                      -->
+    <!-- TAB 4: PORTFOLIOS & PAPER PROOF (USD)                                -->
     <!-- ═════════════════════════════════════════════════════════════════════ -->
     <div id="tab-portfolios" class="tab-pane hidden space-y-6">
-      
-      <!-- Multi-Account Leaderboard -->
+
+      <!-- Primary: Wealthsimple Predict Sandbox Leaderboard -->
+      <div class="card p-4 space-y-3 border-sky-900/60">
+        <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+          <div>
+            <span class="font-bold text-xs text-white uppercase tracking-wider block">Wealthsimple Predict ($500 USD Sandbox) Leaderboard</span>
+            <span class="text-[11px] text-slate-400">Primary Paper Sandbox — Macro &amp; Financial binary event performance &amp; Brier calibration score</span>
+          </div>
+          <button
+            type="button"
+            onclick="switchTab('predictions')"
+            class="px-3 py-1 rounded bg-sky-950 hover:bg-sky-900 border border-sky-800 text-sky-300 text-xs font-semibold"
+          >
+            Open WS Predict Desk &rarr;
+          </button>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs">
+            <thead>
+              <tr class="border-b border-slate-800 text-[10px] text-slate-500 uppercase font-semibold">
+                <th class="py-2">Trader</th>
+                <th class="py-2 text-right">Starting USD</th>
+                <th class="py-2 text-right">Predict Equity USD</th>
+                <th class="py-2 text-right">Net Return %</th>
+                <th class="py-2 text-center">Open Contracts</th>
+                <th class="py-2 text-center">Settled</th>
+                <th class="py-2 text-right">AI Brier Score</th>
+              </tr>
+            </thead>
+            <tbody id="portfolios-predict-lb-body" class="divide-y divide-slate-800/60 font-mono">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Secondary: Multi-Account Swing Sandbox Leaderboard -->
       <div class="card p-4 space-y-3">
         <div class="flex items-center justify-between pb-2 border-b border-slate-800">
           <div>
-            <span class="font-bold text-xs text-white uppercase tracking-wider block">Multi-Account Alpha Leaderboard</span>
-            <span class="text-[11px] text-slate-400">Compare virtual performance and live trade executions across accounts</span>
+            <span class="font-bold text-xs text-white uppercase tracking-wider block">Multi-Account Swing Quant Leaderboard (USD Sandbox)</span>
+            <span class="text-[11px] text-slate-400">Compare simulated swing proof-of-edge &amp; manually logged fills across accounts</span>
           </div>
         </div>
 
@@ -604,8 +688,8 @@
               <tr class="border-b border-slate-800 text-[10px] text-slate-500 uppercase font-semibold">
                 <th class="py-2">Trader</th>
                 <th class="py-2">WS Tier</th>
-                <th class="py-2 text-right">Starting CAD</th>
-                <th class="py-2 text-right">Current Equity</th>
+                <th class="py-2 text-right">Starting USD</th>
+                <th class="py-2 text-right">Current Equity USD</th>
                 <th class="py-2 text-right">Net Return %</th>
                 <th class="py-2 text-center">Open Virtual</th>
                 <th class="py-2 text-center">Closed Trades</th>
@@ -622,7 +706,7 @@
       <!-- Active Open Virtual Positions -->
       <div class="card p-4 space-y-3">
         <div class="flex items-center justify-between pb-2 border-b border-slate-800">
-          <span class="font-bold text-xs text-white uppercase tracking-wider">Active Open Virtual Positions</span>
+          <span class="font-bold text-xs text-white uppercase tracking-wider">Active Open Swing Paper Positions</span>
           <span id="open-positions-count-badge" class="text-xs text-slate-400">0 Open</span>
         </div>
 
@@ -650,7 +734,7 @@
       <!-- Completed Virtual Trade History -->
       <div class="card p-4 space-y-3">
         <div class="flex items-center justify-between pb-2 border-b border-slate-800">
-          <span class="font-bold text-xs text-white uppercase tracking-wider">Completed Virtual Trades Ledger</span>
+          <span class="font-bold text-xs text-white uppercase tracking-wider">Completed Virtual Swing Ledger</span>
         </div>
 
         <div class="overflow-x-auto max-h-72 overflow-y-auto">
@@ -661,8 +745,8 @@
                 <th class="py-2 text-right">Entry</th>
                 <th class="py-2 text-right">Exit</th>
                 <th class="py-2 text-right">Gross PnL</th>
-                <th class="py-2 text-right">WS Fees</th>
-                <th class="py-2 text-right">Net PnL CAD</th>
+                <th class="py-2 text-right">Sim Fees</th>
+                <th class="py-2 text-right">Net PnL USD</th>
                 <th class="py-2 text-right">Return %</th>
                 <th class="py-2">Reason</th>
                 <th class="py-2">Closed At</th>
@@ -678,7 +762,7 @@
       <!-- Real Wealthsimple Trades Ledger -->
       <div class="card p-4 space-y-3">
         <div class="flex items-center justify-between pb-2 border-b border-slate-800">
-          <span class="font-bold text-xs text-white uppercase tracking-wider">Real Wealthsimple Fills Ledger</span>
+          <span class="font-bold text-xs text-white uppercase tracking-wider">Manually Logged Real Wealthsimple Fills</span>
           <button
             type="button"
             onclick="openLogRealTradeModal()"
@@ -697,49 +781,13 @@
                 <th class="py-2">Status</th>
                 <th class="py-2 text-right">Entry</th>
                 <th class="py-2 text-right">Exit</th>
-                <th class="py-2 text-right">Capital CAD</th>
-                <th class="py-2 text-right">Realized CAD</th>
+                <th class="py-2 text-right">Capital USD</th>
+                <th class="py-2 text-right">Realized USD</th>
                 <th class="py-2 text-right">Realized %</th>
                 <th class="py-2 text-center">Action</th>
               </tr>
             </thead>
             <tbody id="real-ws-table-body" class="divide-y divide-slate-800/60 font-mono">
-              <!-- Dynamically populated -->
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- Wealthsimple Predict Sandbox Summary inside Tab 3 -->
-      <div class="card p-4 space-y-3">
-        <div class="flex items-center justify-between pb-2 border-b border-slate-800">
-          <div>
-            <span class="font-bold text-xs text-white uppercase tracking-wider block">Wealthsimple Predict ($500 USD Sandbox) Leaderboard</span>
-            <span class="text-[11px] text-slate-400">Macro &amp; Financial binary event performance &amp; Brier calibration score</span>
-          </div>
-          <button
-            type="button"
-            onclick="switchTab('predictions')"
-            class="px-3 py-1 rounded bg-sky-950 hover:bg-sky-900 border border-sky-800 text-sky-300 text-xs font-semibold"
-          >
-            Open Predict Desk &rarr;
-          </button>
-        </div>
-
-        <div class="overflow-x-auto">
-          <table class="w-full text-left text-xs">
-            <thead>
-              <tr class="border-b border-slate-800 text-[10px] text-slate-500 uppercase font-semibold">
-                <th class="py-2">Trader</th>
-                <th class="py-2 text-right">Starting USD</th>
-                <th class="py-2 text-right">Predict Equity USD</th>
-                <th class="py-2 text-right">Net Return %</th>
-                <th class="py-2 text-center">Open Contracts</th>
-                <th class="py-2 text-center">Settled</th>
-                <th class="py-2 text-right">AI Brier Score</th>
-              </tr>
-            </thead>
-            <tbody id="portfolios-predict-lb-body" class="divide-y divide-slate-800/60 font-mono">
               <!-- Dynamically populated -->
             </tbody>
           </table>
@@ -772,13 +820,13 @@
           </div>
 
           <div class="p-3 rounded-lg bg-slate-950 border border-slate-800 flex flex-col justify-between">
-            <span class="text-slate-500 text-[10px] uppercase block">Reset Virtual Cash</span>
+            <span class="text-slate-500 text-[10px] uppercase block">Reset Swing Sandbox Cash</span>
             <button
               type="button"
               onclick="resetVirtualWallet()"
               class="w-full mt-2 py-1.5 px-3 rounded bg-rose-950/70 hover:bg-rose-900 border border-rose-800 text-rose-300 text-xs font-semibold"
             >
-              Reset to $10,000 CAD
+              Reset to $10,000 USD
             </button>
           </div>
         </div>
@@ -787,9 +835,9 @@
     </div>
 
     <!-- ═════════════════════════════════════════════════════════════════════ -->
-    <!-- TAB 4: PREDICTION MARKETS (WEALTHSIMPLE PREDICT / KALSHI / FINBERT)  -->
+    <!-- TAB 1 (PRIMARY): WEALTHSIMPLE PREDICT / KALSHI / GPU FINBERT        -->
     <!-- ═════════════════════════════════════════════════════════════════════ -->
-    <div id="tab-predictions" class="tab-pane hidden space-y-5">
+    <div id="tab-predictions" class="tab-pane space-y-5">
 
       <!-- Top 4-Stat Telemetry Bar -->
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -1041,8 +1089,8 @@
                 <span id="pred-calc-fee" class="text-slate-300">$0.00</span>
               </div>
               <div class="flex justify-between">
-                <span class="text-slate-400 font-sans">Total Cost</span>
-                <span class="text-white"><strong id="pred-calc-cost-usd">$0.00</strong> <span id="pred-calc-cost-cad" class="text-slate-400 text-[10px]">($0 CAD)</span></span>
+                <span class="text-slate-400 font-sans">Total Cost (USD)</span>
+                <span class="text-white"><strong id="pred-calc-cost-usd">$0.00</strong></span>
               </div>
               <div class="flex justify-between pt-1 border-t border-slate-800/80">
                 <span class="text-slate-400 font-sans">If Right (Net Profit)</span>
@@ -1168,8 +1216,8 @@
   <!-- Footer -->
   <footer class="border-t border-slate-800/80 bg-slate-950 py-3 text-center text-xs text-slate-500">
     <div class="max-w-[1720px] mx-auto px-4 flex items-center justify-between">
-      <span>TradeSense v7 · Modern Institutional Wealthsimple Terminal</span>
-      <span class="text-[11px]">Single Permanent Gateway · Zero Dual URLs</span>
+      <span>TradeSense v8.1 · WS Predict &amp; Denoised USD Quant Sandbox (Simulation Only)</span>
+      <span class="text-[11px]">Single Permanent Gateway · No Real Wealthsimple API Connection</span>
     </div>
   </footer>
 

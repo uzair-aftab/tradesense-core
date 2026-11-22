@@ -18,6 +18,9 @@ let currentWorkspaceData = null;
 let rawBars = [];
 let currentChartMode = 'candles';
 let isChartInitialized = false;
+let workspaceLoaded = false;
+let cachedScannerOpps = [];
+let activeScannerCat = 'ALL';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. Chart Initialization & 0ms Local Toolbar Controls
@@ -256,9 +259,10 @@ async function loadWorkspace(forceRetrain = false) {
 
     const activeTab = document.querySelector('.tab-btn.active');
     if (activeTab && activeTab.dataset.tab === 'model-lab') {
-      const activeSym = data.asset ? data.asset.symbol : 'BTC-CAD';
+      const activeSym = data.asset ? data.asset.symbol : 'BTC-USD';
       const symEl = document.getElementById('benchmark-active-symbol');
       if (symEl) symEl.innerText = activeSym;
+      renderDenoisingAudit(data.denoising_audit || {}, data.regime || {});
       renderBenchmarkTable(data.model_results || data.all_model_results || []);
     }
 
@@ -270,33 +274,44 @@ async function loadWorkspace(forceRetrain = false) {
 }
 
 function renderWorkspace(d) {
+  workspaceLoaded = true;
   const asset = d.asset;
   const execAsset = d.exec_asset;
   const quote = d.quote;
   const consensus = d.consensus;
   const ticket = d.order_ticket;
   const bot = d.virtual_bot;
+  const dispCurr = d.display_currency || 'USD';
 
   // Header badges & clocks
   document.getElementById('header-market-clock').innerText = d.market_clock.toronto_time + ' · ' + (d.market_clock.is_open ? '🟢 Open' : '🔴 Closed');
   document.getElementById('active-asset-category').innerText = asset.category.replace('_', ' ');
   document.getElementById('asset-search-input').value = asset.symbol;
   document.getElementById('stat-symbol').innerText = asset.symbol;
-  document.getElementById('stat-price').innerText = '$' + formatNumber(quote.price) + ' ' + asset.currency;
+  document.getElementById('stat-price').innerText = '$' + formatNumber(quote.price) + ' ' + dispCurr;
   
   const chgEl = document.getElementById('stat-change');
   chgEl.innerText = (quote.change_pct >= 0 ? '+' : '') + quote.change_pct.toFixed(2) + '%';
   chgEl.className = 'font-mono font-semibold ' + (quote.change_pct >= 0 ? 'text-emerald-400' : 'text-rose-400');
   document.getElementById('stat-market-session').innerText = d.market_clock.msg;
 
-  // Consensus Stat
+  // Consensus Stat (Regime + OOS Skill Gated)
   const dirEl = document.getElementById('stat-consensus-dir');
   const dirColor = consensus.direction === 'BULLISH' ? 'text-emerald-400' : (consensus.direction === 'BEARISH' ? 'text-rose-400' : 'text-amber-400');
   dirEl.innerHTML = `<span class="${dirColor}">${consensus.direction} (${consensus.exp_return_pct >= 0 ? '+' : ''}${consensus.exp_return_pct.toFixed(2)}%)</span>`;
-  document.getElementById('stat-consensus-p50').innerText = '$' + formatNumber(consensus.p50);
+  document.getElementById('stat-consensus-p50').innerText = '$' + formatNumber(consensus.p50) + ' ' + dispCurr;
   document.getElementById('stat-consensus-p10').innerText = '$' + formatNumber(consensus.p10);
   document.getElementById('stat-consensus-p90').innerText = '$' + formatNumber(consensus.p90);
   document.getElementById('stat-horizon').innerText = d.profile.horizon_bars + 'B';
+  const regBadgeEl = document.getElementById('stat-consensus-regime');
+  if (regBadgeEl && d.regime && d.regime.regime) {
+    regBadgeEl.innerText = d.regime.regime.replace('_', ' ');
+  }
+  const dirReasonEl = document.getElementById('stat-consensus-reason');
+  if (dirReasonEl) {
+    dirReasonEl.innerText = consensus.direction_reason || 'Causal denoising + OOS skill gate active';
+  }
+  renderDenoisingAudit(d.denoising_audit || {}, d.regime || {});
 
   // Pair Proof-of-Edge Stat
   const eff = bot.efficiency_summary;
@@ -307,8 +322,11 @@ function renderWorkspace(d) {
   document.getElementById('stat-edge-net').innerText = (eff.net_return_pct >= 0 ? '+' : '') + eff.net_return_pct.toFixed(1) + '%';
 
   // User Equity Stat
-  document.getElementById('user-badge-equity').innerText = '$' + formatNumber(bot.total_equity_cad) + ' CAD';
-  document.getElementById('stat-equity-cad').innerText = '$' + formatNumber(bot.total_equity_cad);
+  const activeTabBtn = document.querySelector('.tab-btn.active');
+  if (!activeTabBtn || activeTabBtn.dataset.tab !== 'predictions') {
+    document.getElementById('user-badge-equity').innerText = '$' + formatNumber(bot.total_equity_cad) + ' USD Swing';
+  }
+  document.getElementById('stat-equity-cad').innerText = '$' + formatNumber(bot.total_equity_cad) + ' USD';
   document.getElementById('stat-cash-cad').innerText = '$' + formatNumber(bot.virtual_cash_cad);
   document.getElementById('stat-user-name').innerText = d.profile.display_name;
 
@@ -405,7 +423,7 @@ function renderWorkspace(d) {
           <span class="font-bold text-white">${pos.ticker}</span>
           <span class="text-slate-500 text-[10px] ml-1">${pos.quantity.toFixed(4)} Units</span>
         </div>
-        <span class="font-bold font-mono ${pnlClass}">${unPnl >= 0 ? '+' : ''}$${formatNumber(unPnl)} CAD (${unPct >= 0 ? '+' : ''}${unPct.toFixed(2)}%)</span>
+        <span class="font-bold font-mono ${pnlClass}">${unPnl >= 0 ? '+' : ''}$${formatNumber(unPnl)} USD (${unPct >= 0 ? '+' : ''}${unPct.toFixed(2)}%)</span>
       </div>
       <div class="grid grid-cols-2 gap-2 text-[11px] font-mono text-slate-400 pt-1">
         <div>Entry: <strong class="text-slate-200">$${formatNumber(pos.entry_price)}</strong></div>
@@ -433,15 +451,17 @@ function renderWorkspace(d) {
   document.getElementById('mini-wf-trades').innerText = eff.trades_count + ' Trades';
   document.getElementById('mini-wf-winrate').innerText = eff.win_rate_pct.toFixed(1) + '%';
   document.getElementById('mini-wf-pf').innerText = eff.profit_factor.toFixed(2);
-  document.getElementById('mini-wf-fees').innerText = '$' + eff.total_ws_fees_cad.toFixed(2) + ' CAD';
+  document.getElementById('mini-wf-fees').innerText = '$' + eff.total_ws_fees_cad.toFixed(2) + ' USD';
 
   // Render Wealthsimple Order Ticket
   const proxyCheckbox = document.getElementById('proxy-route-checkbox');
   proxyCheckbox.checked = d.profile.use_proxy_route;
   if (asset.alt_cad_proxy) {
     document.getElementById('proxy-route-banner').classList.remove('hidden');
-    document.getElementById('proxy-switch-label').innerText = `Route via ${asset.alt_cad_proxy}`;
-    document.getElementById('proxy-savings-text').innerText = ticket.proxy_savings_badge || 'Optimal low-fee route';
+    document.getElementById('proxy-switch-label').innerText = `Optional WS TFSA Proxy: ${asset.alt_cad_proxy}`;
+    document.getElementById('proxy-savings-text').innerText = ticket.proxy_cad_note
+      ? `${ticket.proxy_cad_note} · ${ticket.proxy_savings_badge || ''}`
+      : (ticket.proxy_savings_badge || 'Optional low-fee Canadian ETF route');
   } else {
     document.getElementById('proxy-route-banner').classList.add('hidden');
   }
@@ -478,6 +498,7 @@ function showToast(msg) {
 function formatNumber(val) {
   if (val === null || val === undefined || isNaN(val)) return '—';
   const num = Number(val);
+  if (num === 0) return '0.00';
   if (Math.abs(num) >= 1000) {
     return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   } else if (Math.abs(num) >= 1) {
@@ -495,6 +516,11 @@ function formatCompact(num) {
 }
 
 async function refreshCurrentWorkspace() {
+  const activeTab = document.querySelector('.tab-btn.active');
+  if (activeTab && activeTab.dataset.tab === 'predictions' && typeof window.initPredictionsTab === 'function') {
+    await window.initPredictionsTab();
+    return;
+  }
   await loadWorkspace(false);
 }
 
@@ -527,7 +553,7 @@ async function toggleProxyRoute(isChecked) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ use_proxy_route: isChecked }),
     });
-    showToast(isChecked ? 'CAD Proxy Routing Enabled' : 'Direct Asset Trading Enabled');
+    showToast(isChecked ? 'WS TFSA CAD Proxy Routing Enabled' : 'USD Direct Pricing Enabled');
     loadWorkspace(false);
   } catch (err) {
     showToast('Failed to update proxy preference');
@@ -543,7 +569,7 @@ async function toggleBotArmed() {
       body: JSON.stringify({ is_armed: !isCurrentlyArmed }),
     });
     const res = await resp.json();
-    showToast(res.is_armed ? 'Virtual Bot Armed & Active' : 'Virtual Bot Paused');
+    showToast(res.is_armed ? 'Paper Swing Bot Armed & Active' : 'Paper Swing Bot Paused');
     loadWorkspace(false);
   } catch (err) {
     showToast('Error toggling bot status');
@@ -552,7 +578,7 @@ async function toggleBotArmed() {
 
 async function submitPaperBuy() {
   const alloc = parseFloat(document.getElementById('ticket-capital-cad').value) || 500;
-  const sym = currentWorkspaceData ? currentWorkspaceData.asset.symbol : 'BTC-CAD';
+  const sym = currentWorkspaceData ? currentWorkspaceData.asset.symbol : 'BTC-USD';
   const useProxy = document.getElementById('proxy-route-checkbox').checked;
 
   try {
@@ -593,7 +619,7 @@ async function closeVirtualPosition(ticker) {
 }
 
 async function resetVirtualWallet() {
-  if (!confirm('Reset virtual portfolio wallet back to $10,000.00 CAD?')) return;
+  if (!confirm('Reset virtual Swing Sandbox wallet back to $10,000.00 USD?')) return;
   try {
     const resp = await fetch('/api/bot/reset-wallet', {
       method: 'POST',
@@ -601,7 +627,7 @@ async function resetVirtualWallet() {
       body: JSON.stringify({ starting_cad: 10000.0 }),
     });
     const res = await resp.json();
-    showToast('Virtual wallet reset to $10,000 CAD');
+    showToast('Virtual Swing wallet reset to $10,000 USD');
     loadWorkspace(false);
   } catch (err) {
     showToast('Reset failed');
@@ -618,7 +644,8 @@ async function runAlphaScanner(force = false) {
   try {
     const resp = await fetch(`/api/scanner?force=${force ? 'true' : 'false'}`);
     const data = await resp.json();
-    renderScannerTable(data.opportunities || []);
+    cachedScannerOpps = data.opportunities || [];
+    renderScannerTable(cachedScannerOpps);
     renderNewsWire(data.news_articles || [], data.news_sentiment || 0.0);
   } catch (err) {
     tbody.innerHTML = '<tr><td colspan="6" class="py-4 text-center text-rose-500">Scanner failed</td></tr>';
@@ -628,12 +655,19 @@ async function runAlphaScanner(force = false) {
 function renderScannerTable(opps) {
   const tbody = document.getElementById('scanner-table-body');
   tbody.innerHTML = '';
-  if (!opps.length) {
+  const filtered = (opps || []).filter(o => {
+    if (activeScannerCat === 'ALL') return true;
+    if (activeScannerCat === 'CRYPTO') return o.category === 'CRYPTO';
+    if (activeScannerCat === 'US') return o.category === 'US_STOCK' || o.category === 'US_ETF';
+    if (activeScannerCat === 'TSX') return o.category === 'TSX_STOCK' || o.category === 'CANADIAN_ETF' || o.category === 'NEO_CDR';
+    return o.category === activeScannerCat;
+  });
+  if (!filtered.length) {
     tbody.innerHTML = '<tr><td colspan="6" class="py-4 text-center text-slate-500">No scanner opportunities found</td></tr>';
     return;
   }
 
-  opps.forEach(o => {
+  filtered.forEach(o => {
     const tr = document.createElement('tr');
     tr.className = 'hover:bg-slate-900/60 transition';
     const evColor = o.net_ev_pct > 0.5 ? 'text-emerald-400' : (o.net_ev_pct >= 0 ? 'text-slate-300' : 'text-rose-400');
@@ -696,19 +730,63 @@ function renderNewsWire(articles, sentiment) {
   });
 }
 
+function renderDenoisingAudit(audit, regime) {
+  const mEl = document.getElementById('denoise-method');
+  if (mEl && audit && audit.method) {
+    mEl.innerText = `${audit.method} (${audit.zero_lookahead ? 'Zero Lookahead Verified' : 'Causal'})`;
+  }
+  const noiseEl = document.getElementById('denoise-noise-pct');
+  if (noiseEl && audit) {
+    const pct = Number(audit.noise_reduction_pct || 0).toFixed(1);
+    const snr = Number(audit.snr_improvement_db || 0).toFixed(2);
+    noiseEl.innerText = `${pct}% (${snr >= 0 ? '+' : ''}${snr} dB)`;
+  }
+  const spkEl = document.getElementById('denoise-spikes');
+  if (spkEl && audit) {
+    spkEl.innerText = `${audit.spikes_clipped || 0} / ${audit.embargo_gap_bars || 5}B Gap`;
+  }
+  const ratioEl = document.getElementById('denoise-overfit-ratio');
+  if (ratioEl && audit) {
+    ratioEl.innerText = `${Number(audit.overfit_ratio || 1).toFixed(2)}x (${Number(audit.avg_train_mape_pct || 0).toFixed(2)}% -> ${Number(audit.avg_val_mape_pct || 0).toFixed(2)}%)`;
+  }
+  const oosEl = document.getElementById('denoise-oos-skill');
+  if (oosEl && audit) {
+    const sk = Number(audit.ensemble_oos_skill_pct || 0);
+    oosEl.innerText = `${sk >= 0 ? '+' : ''}${sk.toFixed(1)}% · ${audit.gated_models_count || 0} Gated`;
+    oosEl.className = `font-bold ${sk >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+  }
+  const badgeEl = document.getElementById('denoise-overfit-badge');
+  if (badgeEl && audit) {
+    const st = audit.overfit_status || 'CALIBRATING';
+    const regTxt = regime && regime.regime ? ` · ${regime.regime}` : '';
+    badgeEl.innerText = `${st}${regTxt}`;
+    badgeEl.className = st === 'HEALTHY'
+      ? 'text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 font-mono'
+      : (st === 'WATCH'
+        ? 'text-[10px] font-bold px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800 font-mono'
+        : 'text-[10px] font-bold px-2 py-0.5 rounded bg-rose-950 text-rose-300 border border-rose-800 font-mono');
+  }
+}
+
 function renderBenchmarkTable(results) {
   const tbody = document.getElementById('benchmark-table-body');
+  if (!tbody) return;
   tbody.innerHTML = '';
   (results || []).forEach(m => {
     const tr = document.createElement('tr');
-    tr.className = 'hover:bg-slate-900/60 transition';
-    const skillColor = m.skill_pct > 0 ? 'text-emerald-400 font-bold' : (m.skill_pct >= -15 ? 'text-slate-300' : 'text-rose-400');
+    tr.className = m.skill_gated ? 'bg-rose-950/15 opacity-75 hover:bg-slate-900/60 transition' : 'hover:bg-slate-900/60 transition';
+    const skillColor = m.skill_pct > 0 ? 'text-emerald-400 font-bold' : (m.skill_pct >= -5 ? 'text-slate-300' : 'text-rose-400');
+    const ratio = Number(m.overfit_ratio || 1.0);
+    const ratioColor = ratio <= 1.8 ? 'text-emerald-400' : (ratio <= 2.6 ? 'text-amber-300' : 'text-rose-400');
+    const gatedPill = m.skill_gated ? ' <span class="ml-1 px-1 py-0.5 rounded bg-rose-950 border border-rose-800 text-rose-300 text-[9px]">GATED</span>' : '';
     tr.innerHTML = `
       <td class="py-2.5">
-        <span class="font-bold text-white block">${m.name}</span>
+        <span class="font-bold text-white block">${m.name}${gatedPill}</span>
         <span class="text-[10px] text-slate-500 font-sans">${m.family} · ${m.suitability}</span>
       </td>
+      <td class="py-2.5 text-right text-slate-400">${Number(m.train_mape_pct ?? m.mape_pct).toFixed(2)}%</td>
       <td class="py-2.5 text-right text-slate-300">${m.mape_pct.toFixed(2)}%</td>
+      <td class="py-2.5 text-right ${ratioColor}">${ratio.toFixed(2)}x</td>
       <td class="py-2.5 text-right ${skillColor}">${m.skill_pct >= 0 ? '+' : ''}${m.skill_pct.toFixed(1)}%</td>
       <td class="py-2.5 text-right font-bold ${m.hit_rate_pct >= 55 ? 'text-emerald-400' : 'text-slate-400'}">${m.hit_rate_pct.toFixed(1)}%</td>
       <td class="py-2.5 text-right text-slate-200 font-bold">$${formatNumber(m.p50)}</td>
@@ -904,7 +982,7 @@ async function submitLogRealTrade() {
 }
 
 async function closeRealWsTrade(txId) {
-  const exitPriceStr = prompt('Enter your Wealthsimple exit fill price ($ CAD):');
+  const exitPriceStr = prompt('Enter your Wealthsimple exit fill price ($ USD):');
   if (!exitPriceStr) return;
   const exitPrice = parseFloat(exitPriceStr);
   if (isNaN(exitPrice) || exitPrice <= 0) {
@@ -958,21 +1036,28 @@ function switchTab(tabName) {
 
   if (tabName === 'model-lab') {
     runAlphaScanner(false);
-    if (currentWorkspaceData) {
-      const activeSym = currentWorkspaceData.asset ? currentWorkspaceData.asset.symbol : 'BTC-CAD';
+    if (!workspaceLoaded) {
+      loadWorkspace(false);
+    } else if (currentWorkspaceData) {
+      const activeSym = currentWorkspaceData.asset ? currentWorkspaceData.asset.symbol : 'BTC-USD';
       const symEl = document.getElementById('benchmark-active-symbol');
       if (symEl) symEl.innerText = activeSym;
+      renderDenoisingAudit(currentWorkspaceData.denoising_audit || {}, currentWorkspaceData.regime || {});
       renderBenchmarkTable(currentWorkspaceData.model_results || currentWorkspaceData.all_model_results || []);
     }
   } else if (tabName === 'portfolios') {
     loadPortfolios();
   } else if (tabName === 'predictions' && typeof window.initPredictionsTab === 'function') {
     window.initPredictionsTab();
-  } else if (tabName === 'terminal' && chart) {
-    setTimeout(() => {
-      chart.applyOptions({ width: document.getElementById('chart-container').clientWidth });
-      chart.timeScale().fitContent();
-    }, 50);
+  } else if (tabName === 'terminal') {
+    if (!workspaceLoaded) {
+      loadWorkspace(false);
+    } else if (chart) {
+      setTimeout(() => {
+        chart.applyOptions({ width: document.getElementById('chart-container').clientWidth });
+        chart.timeScale().fitContent();
+      }, 50);
+    }
   }
 }
 
@@ -983,6 +1068,18 @@ document.addEventListener('DOMContentLoaded', () => {
   // Tab switching
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+  });
+
+  // Scanner category pills
+  document.querySelectorAll('.scan-filter-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.scan-filter-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      activeScannerCat = btn.dataset.cat || 'ALL';
+      if (cachedScannerOpps.length) {
+        renderScannerTable(cachedScannerOpps);
+      }
+    });
   });
 
   // Timeframe pills
@@ -1087,6 +1184,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Initial Load
-  loadWorkspace(false);
+  // Initial Load: WS Predict Tab 1 First
+  if (typeof window.initPredictionsTab === 'function') {
+    window.initPredictionsTab();
+  } else {
+    loadWorkspace(false);
+  }
 });

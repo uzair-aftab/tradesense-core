@@ -26,6 +26,7 @@ from src.data.profiles import profile_manager
 from src.data.ws_catalog import WealthsimpleAsset, WealthsimpleCatalog, WealthsimpleFeeSchedule
 from src.models.model_zoo import ModelZooEngine, build_ml_feature_matrix
 from src.models.profit_engine import MarketHoursGuard, PositionRiskSizer, TrailingStopRatchet
+from src.models.regime import RegimeClassifier
 from src.utils.logger import get_logger
 
 logger = get_logger("hfp.virtual_bot")
@@ -183,7 +184,7 @@ class VirtualBotEngine:
             horizon_bars=horizon_bars,
         )
 
-        msg = f"Bought {qty:.4f} {exec_asset.ws_display_symbol} @ ${curr_price:,.2f} (Alloc: ${capital_cad:,.2f} CAD, Fee: ${entry_fee_cad:,.2f})"
+        msg = f"Bought {qty:.4f} {exec_asset.ws_display_symbol} @ ${curr_price:,.2f} (Alloc: ${capital_cad:,.2f} USD, Fee: ${entry_fee_cad:,.2f})"
         self.log_event(user_id, "PAPER_BUY", msg)
         logger.info("[%s] Paper Buy: %s", user_id, msg)
 
@@ -266,7 +267,7 @@ class VirtualBotEngine:
 
         self.db.delete_virtual_position(user_id, ticker)
 
-        msg = f"Closed {ticker} @ ${exit_price:,.2f} ({exit_reason}) -> Net PnL: ${net_pnl_cad:+,.2f} CAD ({net_pnl_pct:+.2f}%)"
+        msg = f"Closed {ticker} @ ${exit_price:,.2f} ({exit_reason}) -> Net PnL: ${net_pnl_cad:+,.2f} USD ({net_pnl_pct:+.2f}%)"
         self.log_event(user_id, "PAPER_CLOSE", msg)
         logger.info("[%s] %s", user_id, msg)
 
@@ -585,16 +586,24 @@ class VirtualBotEngine:
                     try:
                         df_act = DataLake().pipeline(active_sym, timeframe="1h", lookback="30d", include_sentiment=False, normalise=False)
                         if df_act is not None and len(df_act) >= 25:
-                            curr_p = float(df_act["Close"].iloc[-1])
+                            regime_ctx = RegimeClassifier().classify(df_act)
+                            if regime_ctx.cash_preservation_active:
+                                logger.debug("[%s] Skipping auto-entry on %s: %s", user_id, active_sym, regime_ctx.reason)
+                                continue
+
                             zoo_res = ModelZooEngine.train_and_evaluate(df_act, asset, horizon_bars=5)
-                            exp_ret = zoo_res.get("exp_return_pct", 0.0)
+                            oos_skill = float(zoo_res.get("denoising_audit", {}).get("ensemble_oos_skill_pct", 0.0))
+                            exp_ret = float(zoo_res.get("exp_return_pct", 0.0))
+                            if oos_skill <= 0.0:
+                                logger.debug("[%s] Skipping auto-entry on %s: negative OOS skill %.1f%%", user_id, active_sym, oos_skill)
+                                continue
 
                             primary, exec_a, _ = WealthsimpleCatalog.get_execution_route(active_sym, use_proxy=prof.use_proxy_route)
                             fee_res = WealthsimpleFeeSchedule.calculate_fee(exec_a, 500.0, prof.ws_tier, prof.usd_account_active)
                             hurdle = fee_res.round_trip_total_pct * 1.6
 
                             if exp_ret >= hurdle and exp_ret > 0.8:
-                                # High conviction: open Quarter-Kelly paper trade
+                                # High conviction + proven OOS skill + favorable regime: open paper trade
                                 self.execute_paper_buy(
                                     user_id=user_id,
                                     symbol=active_sym,

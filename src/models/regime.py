@@ -162,14 +162,39 @@ class RegimeClassifier:
             plus_val = float(row.get("Plus_DI", 20.0))
             minus_val = float(row.get("Minus_DI", 20.0))
 
-        # Indicators
-        ema9 = float(row.get("EMA_9", price))
-        ema20 = float(row.get("EMA_20", price))
-        bb_u = float(row.get("BB_Upper", price * 1.02))
-        bb_m = float(row.get("BB_Mid", price))
-        bb_l = float(row.get("BB_Lower", price * 0.98))
-        rsi = float(row.get("RSI_14", 50.0))
-        atr = float(row.get("ATR_14", price * 0.01))
+        # Indicators (compute dynamically on raw OHLCV if pre-computed columns absent)
+        if "EMA_9" in df.columns and "EMA_20" in df.columns and "BB_Upper" in df.columns:
+            ema9 = float(row.get("EMA_9", price))
+            ema20 = float(row.get("EMA_20", price))
+            bb_u = float(row.get("BB_Upper", price * 1.02))
+            bb_m = float(row.get("BB_Mid", price))
+            bb_l = float(row.get("BB_Lower", price * 0.98))
+            rsi = float(row.get("RSI_14", 50.0))
+            atr = float(row.get("ATR_14", price * 0.01))
+        else:
+            closes = df["Close"].astype(float)
+            highs_s = df["High"].astype(float) if "High" in df.columns else closes
+            lows_s = df["Low"].astype(float) if "Low" in df.columns else closes
+            ema9 = float(closes.ewm(span=9, adjust=False).mean().iloc[current_idx])
+            ema20 = float(closes.ewm(span=20, adjust=False).mean().iloc[current_idx])
+            bb_m_s = closes.rolling(20, min_periods=5).mean()
+            bb_std_s = closes.rolling(20, min_periods=5).std().fillna(price * 0.01)
+            bb_m = float(bb_m_s.iloc[current_idx]) if not np.isnan(bb_m_s.iloc[current_idx]) else price
+            bb_std = float(bb_std_s.iloc[current_idx]) if not np.isnan(bb_std_s.iloc[current_idx]) else price * 0.01
+            bb_u = bb_m + 2.0 * bb_std
+            bb_l = bb_m - 2.0 * bb_std
+            delta = closes.diff()
+            up_r = delta.clip(lower=0.0).ewm(alpha=1.0 / 14, adjust=False).mean()
+            dn_r = (-delta.clip(upper=0.0)).ewm(alpha=1.0 / 14, adjust=False).mean()
+            rs_val = float(up_r.iloc[current_idx]) / max(float(dn_r.iloc[current_idx]), 1e-6)
+            rsi = 100.0 - (100.0 / (1.0 + rs_val))
+            tr = pd.concat([
+                highs_s - lows_s,
+                (highs_s - closes.shift(1)).abs(),
+                (lows_s - closes.shift(1)).abs(),
+            ], axis=1).max(axis=1)
+            atr_val = float(tr.rolling(14, min_periods=3).mean().iloc[current_idx])
+            atr = atr_val if np.isfinite(atr_val) else price * 0.01
 
         # Bollinger Metrics
         bb_spread = max(0.01, bb_u - bb_l)

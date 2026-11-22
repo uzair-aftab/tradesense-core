@@ -98,6 +98,87 @@ FEATURE_LABELS: Dict[str, str] = {
 }
 
 
+def causal_denoise_price_series(
+    closes: pd.Series,
+    window: int = 30,
+    mad_sigma: float = 3.5,
+    process_noise_ratio: float = 0.15,
+) -> Tuple[pd.Series, Dict[str, Any]]:
+    """
+    Strictly causal (zero-lookahead) two-stage financial signal denoiser:
+      1. Causal Rolling MAD Return Despiking (clips microstructure outliers using only t-window..t)
+      2. Forward-Only Adaptive 1D Kalman Filter (tracks latent price while attenuating high-freq noise)
+    Guarantees prefix bit-for-bit invariance when future bars are mutated.
+    """
+    arr = np.maximum(closes.astype(float).values, 1e-8)
+    n = len(arr)
+    if n < 5:
+        return pd.Series(arr, index=closes.index), {
+            "method": "Causal MAD Despiking (3.5σ) + Adaptive 1D Kalman Filter",
+            "zero_lookahead": True,
+            "spikes_clipped": 0,
+            "noise_reduction_pct": 0.0,
+            "snr_improvement_db": 0.0,
+        }
+
+    log_p = np.log(arr)
+    raw_ret = np.zeros(n, dtype=float)
+    raw_ret[1:] = np.diff(log_p)
+
+    # Stage 1: Causal MAD Return Despiking (strictly past/current bars <= t)
+    r_clean = raw_ret.copy()
+    log_p_clean = np.empty(n, dtype=float)
+    log_p_clean[0] = log_p[0]
+    spikes_clipped = 0
+
+    for t in range(1, n):
+        lo = max(1, t - window + 1)
+        win = raw_ret[lo : t + 1]
+        med = float(np.median(win))
+        mad = float(np.median(np.abs(win - med)))
+        sigma = max(1.4826 * mad, 1e-4)
+        hi_bound = med + mad_sigma * sigma
+        lo_bound = med - mad_sigma * sigma
+        clipped = min(max(float(raw_ret[t]), lo_bound), hi_bound)
+        if clipped != float(raw_ret[t]):
+            spikes_clipped += 1
+        r_clean[t] = clipped
+        log_p_clean[t] = log_p_clean[t - 1] + clipped
+
+    # Stage 2: Forward-Only Adaptive 1D Kalman State Filter
+    x_filt = np.empty(n, dtype=float)
+    x_filt[0] = log_p_clean[0]
+    P = 1e-4
+    for t in range(1, n):
+        lo_r = max(1, t - 19)
+        r_var = max(float(np.var(r_clean[lo_r : t + 1])), 1e-6)
+        Q_t = process_noise_ratio * r_var
+        P_pred = P + Q_t
+        K = P_pred / (P_pred + r_var)
+        x_filt[t] = x_filt[t - 1] + K * (log_p_clean[t] - x_filt[t - 1])
+        P = (1.0 - K) * P_pred
+
+    raw_var = float(np.var(raw_ret[1:])) if n > 2 else 0.0
+    den_ret = np.diff(x_filt)
+    den_var = float(np.var(den_ret)) if len(den_ret) > 1 else raw_var
+    if raw_var > 1e-12 and den_var > 0.0:
+        noise_reduction_pct = round(max(0.0, min(95.0, (1.0 - den_var / raw_var) * 100.0)), 1)
+        snr_db = round(10.0 * math.log10(raw_var / den_var), 2)
+    else:
+        noise_reduction_pct = 0.0
+        snr_db = 0.0
+
+    denoised_series = pd.Series(np.exp(x_filt), index=closes.index)
+    audit = {
+        "method": "Causal MAD Despiking (3.5σ) + Adaptive 1D Kalman Filter",
+        "zero_lookahead": True,
+        "spikes_clipped": int(spikes_clipped),
+        "noise_reduction_pct": float(noise_reduction_pct),
+        "snr_improvement_db": float(snr_db),
+    }
+    return denoised_series, audit
+
+
 def build_ml_feature_matrix(
     df: pd.DataFrame,
     horizon_bars: int = 5,
@@ -107,49 +188,51 @@ def build_ml_feature_matrix(
     """
     Constructs a strictly causal multi-scale quantitative feature matrix from OHLCV data.
     Guarantees:
-      - All features at row t are calculated strictly using bars <= t.
+      - Features are engineered from causally denoised closes (bars <= t only).
       - ffill() and fillna(0.0) are applied ONLY to feature columns, NEVER to target_ret.
-      - target_ret has NaN on the last horizon_bars rows where future price does not exist yet.
+      - target_ret is strictly evaluated against raw unfiltered future closes (NaN on last horizon_bars).
     """
     feat = pd.DataFrame(index=df.index)
     closes = df["Close"].astype(float)
+    denoised_closes, denoise_stats = causal_denoise_price_series(closes)
+
     highs = df["High"].astype(float) if "High" in df.columns else closes
     lows = df["Low"].astype(float) if "Low" in df.columns else closes
     opens = df["Open"].astype(float) if "Open" in df.columns else closes
     volumes = df["Volume"].astype(float) if "Volume" in df.columns else pd.Series(1000.0, index=df.index)
 
-    # 1. Multi-scale causal log returns
-    log_p = np.log(np.maximum(closes, 1e-8))
+    # 1. Multi-scale causal log returns (denoised)
+    log_p = np.log(np.maximum(denoised_closes, 1e-8))
     for lag in [1, 2, 3, 5, 10, 20]:
         feat[f"ret_{lag}"] = log_p.diff(lag)
 
     # 2. Return acceleration (2nd order momentum)
     feat["ret_accel"] = feat["ret_1"] - feat["ret_3"]
 
-    # 3. Bar structure & Causal Gaps
-    feat["bar_gap"] = (opens - closes.shift(1)) / np.maximum(closes.shift(1), 1e-6)
+    # 3. Bar structure & Causal Gaps (clipped to tame outlier noise)
+    feat["bar_gap"] = ((opens - closes.shift(1)) / np.maximum(closes.shift(1), 1e-6)).clip(-0.1, 0.1)
     bar_range = np.maximum(highs - lows, 1e-6)
-    feat["body_range_ratio"] = (closes - opens).abs() / bar_range
-    feat["upper_wick_ratio"] = (highs - np.maximum(closes, opens)) / bar_range
-    feat["lower_wick_ratio"] = (np.minimum(closes, opens) - lows) / bar_range
+    feat["body_range_ratio"] = ((closes - opens).abs() / bar_range).clip(0.0, 1.0)
+    feat["upper_wick_ratio"] = ((highs - np.maximum(closes, opens)) / bar_range).clip(0.0, 1.0)
+    feat["lower_wick_ratio"] = ((np.minimum(closes, opens) - lows) / bar_range).clip(0.0, 1.0)
 
-    # 4. Moving Average spreads
-    ema9 = closes.ewm(span=9, adjust=False).mean()
-    ema21 = closes.ewm(span=21, adjust=False).mean()
-    ema50 = closes.ewm(span=50, adjust=False).mean()
-    feat["dist_ema9"] = (closes - ema9) / closes
-    feat["dist_ema21"] = (closes - ema21) / closes
-    feat["dist_ema50"] = (closes - ema50) / closes
-    feat["ema_trend_spread"] = (ema9 - ema21) / closes
+    # 4. Moving Average spreads (denoised)
+    ema9 = denoised_closes.ewm(span=9, adjust=False).mean()
+    ema21 = denoised_closes.ewm(span=21, adjust=False).mean()
+    ema50 = denoised_closes.ewm(span=50, adjust=False).mean()
+    feat["dist_ema9"] = (denoised_closes - ema9) / denoised_closes
+    feat["dist_ema21"] = (denoised_closes - ema21) / denoised_closes
+    feat["dist_ema50"] = (denoised_closes - ema50) / denoised_closes
+    feat["ema_trend_spread"] = (ema9 - ema21) / denoised_closes
 
-    # 5. Volatility & Bollinger Band width
-    roll_mean = closes.rolling(20, min_periods=5).mean()
-    roll_std = closes.rolling(20, min_periods=5).std().replace(0, 1e-6)
-    feat["bb_pct_b"] = ((closes - (roll_mean - 2 * roll_std)) / (4 * roll_std)).clip(-0.5, 1.5)
+    # 5. Volatility & Bollinger Band width (denoised)
+    roll_mean = denoised_closes.rolling(20, min_periods=5).mean()
+    roll_std = denoised_closes.rolling(20, min_periods=5).std().replace(0, 1e-6)
+    feat["bb_pct_b"] = ((denoised_closes - (roll_mean - 2 * roll_std)) / (4 * roll_std)).clip(-0.5, 1.5)
     feat["bb_width"] = ((4 * roll_std) / roll_mean).clip(0.001, 1.0)
 
-    # 6. Wilder's RSI (14)
-    delta = closes.diff()
+    # 6. Wilder's RSI (14) (denoised)
+    delta = denoised_closes.diff()
     up = delta.clip(lower=0.0).ewm(alpha=1.0 / 14, adjust=False).mean()
     down = (-delta.clip(upper=0.0)).ewm(alpha=1.0 / 14, adjust=False).mean()
     rs = up / np.maximum(down, 1e-6)
@@ -161,30 +244,29 @@ def build_ml_feature_matrix(
     tr3 = (lows - closes.shift(1)).abs()
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     atr = tr.rolling(14, min_periods=3).mean()
-    feat["atr_pct"] = atr / closes
+    feat["atr_pct"] = (atr / closes).clip(0.0, 0.25)
 
-    # 8. Microstructure & Volume Dynamics (Rolling 20-bar VWAP, not cumulative!)
+    # 8. Microstructure & Volume Dynamics (Rolling 20-bar VWAP)
     vol_mean = volumes.rolling(20, min_periods=5).mean().replace(0, 1.0)
     vol_std = volumes.rolling(20, min_periods=5).std().replace(0, 1.0)
     feat["whale_z"] = ((volumes - vol_mean) / vol_std).clip(-3.0, 5.0)
 
-    # Rolling-20 VWAP
     roll20_vol = volumes.rolling(20, min_periods=3).sum().replace(0, 1.0)
-    roll20_pv = (closes * volumes).rolling(20, min_periods=3).sum()
+    roll20_pv = (denoised_closes * volumes).rolling(20, min_periods=3).sum()
     roll20_vwap = roll20_pv / roll20_vol
-    feat["dist_vwap_roll20"] = ((closes - roll20_vwap) / closes).clip(-0.2, 0.2)
+    feat["dist_vwap_roll20"] = ((denoised_closes - roll20_vwap) / denoised_closes).clip(-0.2, 0.2)
 
     # Signed volume flow
-    p_sign = np.sign(closes.diff())
+    p_sign = np.sign(denoised_closes.diff())
     signed_vol = p_sign * volumes
     s_mean = signed_vol.rolling(10, min_periods=3).mean()
     s_std = signed_vol.rolling(10, min_periods=3).std().replace(0, 1.0)
     feat["signed_flow_z"] = ((signed_vol - s_mean) / s_std).clip(-3.0, 3.0)
 
-    # 20-bar return skewness
+    # 20-bar return skewness (denoised)
     feat["ret_skew_20"] = feat["ret_1"].rolling(20, min_periods=8).skew().clip(-3.0, 3.0)
 
-    # Realized volatility shock ratio (vol_5 / vol_20)
+    # Realized volatility shock ratio (vol_5 / vol_20, denoised)
     vol_5 = feat["ret_1"].rolling(5, min_periods=3).std()
     vol_20 = feat["ret_1"].rolling(20, min_periods=5).std().replace(0, 1e-6)
     feat["vol_ratio_5_20"] = (vol_5 / vol_20).clip(0.1, 5.0)
@@ -196,8 +278,9 @@ def build_ml_feature_matrix(
     feature_cols = [c for c in FEATURE_NAMES if c in feat.columns]
     # Apply forward fill strictly to feature columns, followed by 0.0 fill for initial lags
     feat[feature_cols] = feat[feature_cols].ffill().fillna(0.0)
+    feat.attrs["denoising_audit"] = denoise_stats
 
-    # Target: forward horizon return. NaN on last horizon_bars rows (NEVER bfilled!)
+    # Target: raw unfilled forward horizon return (NEVER smoothed or bfilled!)
     feat["target_ret"] = (closes.shift(-horizon_bars) - closes) / closes
 
     return feat, feature_cols
@@ -234,30 +317,147 @@ class BaseQuantModel(ABC):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 2B. Shared PyTorch Sequence Training & Early-Stopping Helpers
+# ─────────────────────────────────────────────────────────────────────────────
+def _dl_loss(p10: "torch.Tensor", p50: "torch.Tensor", p90: "torch.Tensor", yt: "torch.Tensor") -> "torch.Tensor":
+    point_loss = F.smooth_l1_loss(p50, yt, beta=0.01)
+    l10 = torch.max(0.10 * (yt - p10), -0.90 * (yt - p10)).mean()
+    l90 = torch.max(0.90 * (yt - p90), -0.10 * (yt - p90)).mean()
+    return point_loss + 0.35 * (l10 + l90)
+
+
+def _fit_dl_sequence_model(
+    net_builder: Any,
+    scaler: RobustScaler,
+    X: np.ndarray,
+    y: np.ndarray,
+    seq_len: int,
+    epochs: int = 28,
+    transpose_seq: bool = False,
+) -> Optional[Any]:
+    if DEVICE is None or len(X) < seq_len + 8:
+        return None
+
+    Xs = np.clip(scaler.fit_transform(X), -6.0, 6.0)
+    seqs, tgts = [], []
+    for i in range(len(Xs) - seq_len):
+        window = Xs[i : i + seq_len]
+        seqs.append(window.T if transpose_seq else window)
+        tgts.append(y[i + seq_len])
+
+    if len(seqs) < 8:
+        return None
+
+    n_seq = len(seqs)
+    val_n = max(4, int(n_seq * 0.15))
+    tr_n = n_seq - val_n if (n_seq - val_n) >= 8 else n_seq
+
+    Xt_tr = torch.tensor(np.array(seqs[:tr_n]), dtype=torch.float32).to(DEVICE)
+    yt_tr = torch.tensor(np.array(tgts[:tr_n]), dtype=torch.float32).unsqueeze(1).to(DEVICE)
+    if tr_n < n_seq:
+        Xt_va = torch.tensor(np.array(seqs[tr_n:]), dtype=torch.float32).to(DEVICE)
+        yt_va = torch.tensor(np.array(tgts[tr_n:]), dtype=torch.float32).unsqueeze(1).to(DEVICE)
+    else:
+        Xt_va, yt_va = Xt_tr, yt_tr
+
+    y_scale = float(max(np.std(y) * 2.5, 0.015))
+    torch.manual_seed(42)
+    net = net_builder(y_scale).to(DEVICE)
+    optimizer = torch.optim.AdamW(net.parameters(), lr=1.5e-3, weight_decay=1e-2)
+
+    best_loss = float("inf")
+    best_state = {k: v.detach().cpu().clone() for k, v in net.state_dict().items()}
+    patience = 6
+    wait = 0
+
+    for _ in range(epochs):
+        net.train()
+        noisy_x = Xt_tr + 0.05 * torch.randn_like(Xt_tr)
+        p10, p50, p90 = net(noisy_x)
+        loss = _dl_loss(p10, p50, p90, yt_tr)
+        optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(net.parameters(), 0.5)
+        optimizer.step()
+
+        net.eval()
+        with torch.no_grad():
+            vp10, vp50, vp90 = net(Xt_va)
+            val_loss = float(_dl_loss(vp10, vp50, vp90, yt_va).item())
+        if val_loss < best_loss - 1e-5:
+            best_loss = val_loss
+            best_state = {k: v.detach().cpu().clone() for k, v in net.state_dict().items()}
+            wait = 0
+        else:
+            wait += 1
+            if wait >= patience:
+                break
+
+    net.load_state_dict({k: v.to(DEVICE) for k, v in best_state.items()})
+    return net
+
+
+def _predict_dl_sequence_model(
+    net: Optional[Any],
+    scaler: RobustScaler,
+    X_hist: np.ndarray,
+    seq_len: int,
+    current_price: float,
+    horizon_bars: int,
+    transpose_seq: bool = False,
+    fallback_vol: float = 0.02,
+) -> Tuple[float, float, float]:
+    if net is None or DEVICE is None:
+        vol = fallback_vol * math.sqrt(horizon_bars / 5.0)
+        return (round(current_price * (1 - vol), 4), round(current_price, 4), round(current_price * (1 + vol), 4))
+
+    net.eval()
+    with torch.no_grad():
+        Xs = np.clip(scaler.transform(X_hist), -6.0, 6.0)
+        if len(Xs) < seq_len:
+            pad = np.repeat(Xs[:1], seq_len - len(Xs), axis=0)
+            Xs = np.vstack([pad, Xs])
+        win = Xs[-seq_len:].T if transpose_seq else Xs[-seq_len:]
+        seq = torch.tensor(win, dtype=torch.float32).unsqueeze(0).to(DEVICE)
+        p10_t, p50_t, p90_t = net(seq)
+        r10 = float(p10_t.cpu().item())
+        r50 = float(p50_t.cpu().item())
+        r90 = float(p90_t.cpu().item())
+
+        r10 = min(r10, r50 - 0.003)
+        r90 = max(r90, r50 + 0.003)
+        return (
+            round(current_price * (1.0 + r10), 4),
+            round(current_price * (1.0 + r50), 4),
+            round(current_price * (1.0 + r90), 4),
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 3. Model 1: Attention-BiLSTM Net (PyTorch Deep Learning)
 # ─────────────────────────────────────────────────────────────────────────────
 if DEVICE is not None:
     class _BiLSTMPyTorch(nn.Module):
-        def __init__(self, input_dim: int, hidden_dim: int = 36):
+        def __init__(self, input_dim: int, hidden_dim: int = 24, max_ret: float = 0.06):
             super().__init__()
+            self.max_ret = max_ret
             self.lstm = nn.LSTM(
                 input_size=input_dim,
                 hidden_size=hidden_dim,
                 num_layers=2,
                 bidirectional=True,
                 batch_first=True,
-                dropout=0.15,
+                dropout=0.25,
             )
             self.attn = nn.Linear(hidden_dim * 2, 1)
             self.head_p50 = nn.Linear(hidden_dim * 2, 1)
             self.head_spread = nn.Linear(hidden_dim * 2, 2)
 
         def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-            # x: (batch, seq_len, input_dim)
             out, _ = self.lstm(x)
             attn_weights = torch.softmax(self.attn(out), dim=1)
             context = torch.sum(attn_weights * out, dim=1)
-            p50 = self.head_p50(context)
+            p50 = self.max_ret * torch.tanh(self.head_p50(context))
             spreads = F.softplus(self.head_spread(context))
             p10 = p50 - spreads[:, 0:1]
             p90 = p50 + spreads[:, 1:2]
@@ -271,43 +471,17 @@ class AttentionBiLSTMModel(BaseQuantModel):
     family = "Deep Learning"
     suitability = "Sequential Momentum, Crypto & Swing Equities"
 
-    def __init__(self, seq_len: int = 16, epochs: int = 22):
+    def __init__(self, seq_len: int = 16, epochs: int = 28):
         self.seq_len = seq_len
         self.epochs = epochs
         self.scaler = RobustScaler()
         self.net: Optional[Any] = None
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> None:
-        if DEVICE is None or len(X) < self.seq_len + 8:
-            return
-
-        Xs = self.scaler.fit_transform(X)
-        seqs, tgts = [], []
-        for i in range(len(Xs) - self.seq_len):
-            seqs.append(Xs[i : i + self.seq_len])
-            tgts.append(y[i + self.seq_len])
-
-        if len(seqs) < 8:
-            return
-
-        Xt = torch.tensor(np.array(seqs), dtype=torch.float32).to(DEVICE)
-        yt = torch.tensor(np.array(tgts), dtype=torch.float32).unsqueeze(1).to(DEVICE)
-
-        self.net = _BiLSTMPyTorch(input_dim=X.shape[1]).to(DEVICE)
-        optimizer = torch.optim.AdamW(self.net.parameters(), lr=0.003, weight_decay=1e-4)
-
-        self.net.train()
-        for _ in range(self.epochs):
-            p10, p50, p90 = self.net(Xt)
-            # Pinball quantile losses
-            l10 = torch.max(0.10 * (yt - p10), (0.10 - 1.0) * (yt - p10)).mean()
-            l50 = torch.abs(yt - p50).mean()
-            l90 = torch.max(0.90 * (yt - p90), (0.90 - 1.0) * (yt - p90)).mean()
-            loss = l10 + l50 + l90
-            optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.net.parameters(), 1.0)
-            optimizer.step()
+        self.net = _fit_dl_sequence_model(
+            lambda scale: _BiLSTMPyTorch(input_dim=X.shape[1], hidden_dim=24, max_ret=scale),
+            self.scaler, X, y, self.seq_len, self.epochs, transpose_seq=False,
+        )
 
     def predict_quantiles(
         self,
@@ -315,29 +489,9 @@ class AttentionBiLSTMModel(BaseQuantModel):
         current_price: float,
         horizon_bars: int,
     ) -> Tuple[float, float, float]:
-        if self.net is None or DEVICE is None:
-            vol = 0.02 * math.sqrt(horizon_bars / 5.0)
-            return (round(current_price * (1 - vol), 4), round(current_price, 4), round(current_price * (1 + vol), 4))
-
-        self.net.eval()
-        with torch.no_grad():
-            Xs = self.scaler.transform(X_hist)
-            if len(Xs) < self.seq_len:
-                pad = np.repeat(Xs[:1], self.seq_len - len(Xs), axis=0)
-                Xs = np.vstack([pad, Xs])
-            seq = torch.tensor(Xs[-self.seq_len:], dtype=torch.float32).unsqueeze(0).to(DEVICE)
-            p10_t, p50_t, p90_t = self.net(seq)
-            r10 = float(p10_t.cpu().item())
-            r50 = float(p50_t.cpu().item())
-            r90 = float(p90_t.cpu().item())
-
-            r10 = min(r10, r50 - 0.003)
-            r90 = max(r90, r50 + 0.003)
-            return (
-                round(current_price * (1.0 + r10), 4),
-                round(current_price * (1.0 + r50), 4),
-                round(current_price * (1.0 + r90), 4),
-            )
+        return _predict_dl_sequence_model(
+            self.net, self.scaler, X_hist, self.seq_len, current_price, horizon_bars, transpose_seq=False, fallback_vol=0.02
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -362,17 +516,19 @@ if DEVICE is not None:
             self.chomp1 = _Chomp1d(pad)
             self.conv2 = nn.Conv1d(channels, channels, kernel_size, padding=pad, dilation=dilation)
             self.chomp2 = _Chomp1d(pad)
+            self.drop = nn.Dropout(0.25)
             self.gelu = nn.GELU()
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             res = x
-            out = self.gelu(self.chomp1(self.conv1(x)))
+            out = self.drop(self.gelu(self.chomp1(self.conv1(x))))
             out = self.chomp2(self.conv2(out))
             return self.gelu(out + res)
 
     class _TCNNet(nn.Module):
-        def __init__(self, input_dim: int, hidden: int = 32):
+        def __init__(self, input_dim: int, hidden: int = 24, max_ret: float = 0.06):
             super().__init__()
+            self.max_ret = max_ret
             self.in_proj = nn.Conv1d(input_dim, hidden, kernel_size=1)
             self.block1 = _TCNResNetBlock(hidden, dilation=1)
             self.block2 = _TCNResNetBlock(hidden, dilation=2)
@@ -381,12 +537,11 @@ if DEVICE is not None:
             self.head_spread = nn.Linear(hidden, 2)
 
         def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-            # x: (batch, input_dim, seq_len)
             h = self.in_proj(x)
             h = self.block1(h)
             h = self.block2(h)
             pooled = self.pool(h).squeeze(-1)
-            p50 = self.head_p50(pooled)
+            p50 = self.max_ret * torch.tanh(self.head_p50(pooled))
             spreads = F.softplus(self.head_spread(pooled))
             p10 = p50 - spreads[:, 0:1]
             p90 = p50 + spreads[:, 1:2]
@@ -400,38 +555,17 @@ class DilatedTCNResNetModel(BaseQuantModel):
     family = "Deep Learning"
     suitability = "Intraday Breakouts & High-Vol Crypto"
 
-    def __init__(self, seq_len: int = 16, epochs: int = 22):
+    def __init__(self, seq_len: int = 16, epochs: int = 28):
         self.seq_len = seq_len
         self.epochs = epochs
         self.scaler = RobustScaler()
         self.net: Optional[Any] = None
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> None:
-        if DEVICE is None or len(X) < self.seq_len + 8:
-            return
-
-        Xs = self.scaler.fit_transform(X)
-        seqs, tgts = [], []
-        for i in range(len(Xs) - self.seq_len):
-            seqs.append(Xs[i : i + self.seq_len].T)  # (input_dim, seq_len)
-            tgts.append(y[i + self.seq_len])
-
-        if len(seqs) < 8:
-            return
-
-        Xt = torch.tensor(np.array(seqs), dtype=torch.float32).to(DEVICE)
-        yt = torch.tensor(np.array(tgts), dtype=torch.float32).unsqueeze(1).to(DEVICE)
-
-        self.net = _TCNNet(input_dim=X.shape[1]).to(DEVICE)
-        optimizer = torch.optim.AdamW(self.net.parameters(), lr=0.003)
-
-        self.net.train()
-        for _ in range(self.epochs):
-            p10, p50, p90 = self.net(Xt)
-            loss = torch.abs(yt - p50).mean() + 0.5 * (torch.relu(p10 - yt) + torch.relu(yt - p90)).mean()
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+        self.net = _fit_dl_sequence_model(
+            lambda scale: _TCNNet(input_dim=X.shape[1], hidden=24, max_ret=scale),
+            self.scaler, X, y, self.seq_len, self.epochs, transpose_seq=True,
+        )
 
     def predict_quantiles(
         self,
@@ -439,29 +573,9 @@ class DilatedTCNResNetModel(BaseQuantModel):
         current_price: float,
         horizon_bars: int,
     ) -> Tuple[float, float, float]:
-        if self.net is None or DEVICE is None:
-            vol = 0.025 * math.sqrt(horizon_bars / 5.0)
-            return (round(current_price * (1 - vol), 4), round(current_price, 4), round(current_price * (1 + vol), 4))
-
-        self.net.eval()
-        with torch.no_grad():
-            Xs = self.scaler.transform(X_hist)
-            if len(Xs) < self.seq_len:
-                pad = np.repeat(Xs[:1], self.seq_len - len(Xs), axis=0)
-                Xs = np.vstack([pad, Xs])
-            seq = torch.tensor(Xs[-self.seq_len:].T, dtype=torch.float32).unsqueeze(0).to(DEVICE)
-            p10_t, p50_t, p90_t = self.net(seq)
-            r10 = float(p10_t.cpu().item())
-            r50 = float(p50_t.cpu().item())
-            r90 = float(p90_t.cpu().item())
-
-            r10 = min(r10, r50 - 0.003)
-            r90 = max(r90, r50 + 0.003)
-            return (
-                round(current_price * (1.0 + r10), 4),
-                round(current_price * (1.0 + r50), 4),
-                round(current_price * (1.0 + r90), 4),
-            )
+        return _predict_dl_sequence_model(
+            self.net, self.scaler, X_hist, self.seq_len, current_price, horizon_bars, transpose_seq=True, fallback_vol=0.025
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -469,25 +583,24 @@ class DilatedTCNResNetModel(BaseQuantModel):
 # ─────────────────────────────────────────────────────────────────────────────
 if DEVICE is not None:
     class _TransformerNet(nn.Module):
-        def __init__(self, input_dim: int, d_model: int = 32, nhead: int = 4):
+        def __init__(self, input_dim: int, d_model: int = 24, nhead: int = 4, max_ret: float = 0.06):
             super().__init__()
+            self.max_ret = max_ret
             self.proj = nn.Linear(input_dim, d_model)
             layer = nn.TransformerEncoderLayer(
-                d_model=d_model, nhead=nhead, dim_feedforward=64, batch_first=True, dropout=0.1
+                d_model=d_model, nhead=nhead, dim_feedforward=48, batch_first=True, dropout=0.25
             )
-            self.encoder = nn.TransformerEncoder(layer, num_layers=2)
+            self.encoder = nn.TransformerEncoder(layer, num_layers=1)
             self.head_p50 = nn.Linear(d_model, 1)
             self.head_spread = nn.Linear(d_model, 2)
 
         def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-            # x: (batch, seq_len, input_dim)
             h = self.proj(x)
-            # Create causal upper-triangular mask
             seq_len = x.size(1)
             mask = nn.Transformer.generate_square_subsequent_mask(seq_len).to(x.device)
             enc = self.encoder(h, mask=mask, is_causal=True)
-            last_token = enc[:, -1, :]  # use final causal step
-            p50 = self.head_p50(last_token)
+            last_token = enc[:, -1, :]
+            p50 = self.max_ret * torch.tanh(self.head_p50(last_token))
             spreads = F.softplus(self.head_spread(last_token))
             p10 = p50 - spreads[:, 0:1]
             p90 = p50 + spreads[:, 1:2]
@@ -501,41 +614,17 @@ class MultiHeadTransformerModel(BaseQuantModel):
     family = "Deep Learning"
     suitability = "High-Beta Tech & Multi-Bar Regimes"
 
-    def __init__(self, seq_len: int = 16, epochs: int = 22):
+    def __init__(self, seq_len: int = 16, epochs: int = 28):
         self.seq_len = seq_len
         self.epochs = epochs
         self.scaler = RobustScaler()
         self.net: Optional[Any] = None
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> None:
-        if DEVICE is None or len(X) < self.seq_len + 8:
-            return
-
-        Xs = self.scaler.fit_transform(X)
-        seqs, tgts = [], []
-        for i in range(len(Xs) - self.seq_len):
-            seqs.append(Xs[i : i + self.seq_len])
-            tgts.append(y[i + self.seq_len])
-
-        if len(seqs) < 8:
-            return
-
-        Xt = torch.tensor(np.array(seqs), dtype=torch.float32).to(DEVICE)
-        yt = torch.tensor(np.array(tgts), dtype=torch.float32).unsqueeze(1).to(DEVICE)
-
-        self.net = _TransformerNet(input_dim=X.shape[1]).to(DEVICE)
-        optimizer = torch.optim.AdamW(self.net.parameters(), lr=0.002)
-
-        self.net.train()
-        for _ in range(self.epochs):
-            p10, p50, p90 = self.net(Xt)
-            loss = torch.abs(yt - p50).mean() + 0.3 * (
-                torch.max(0.1 * (yt - p10), -0.9 * (yt - p10)).mean()
-                + torch.max(0.9 * (yt - p90), -0.1 * (yt - p90)).mean()
-            )
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+        self.net = _fit_dl_sequence_model(
+            lambda scale: _TransformerNet(input_dim=X.shape[1], d_model=24, nhead=4, max_ret=scale),
+            self.scaler, X, y, self.seq_len, self.epochs, transpose_seq=False,
+        )
 
     def predict_quantiles(
         self,
@@ -543,29 +632,9 @@ class MultiHeadTransformerModel(BaseQuantModel):
         current_price: float,
         horizon_bars: int,
     ) -> Tuple[float, float, float]:
-        if self.net is None or DEVICE is None:
-            vol = 0.02 * math.sqrt(horizon_bars / 5.0)
-            return (round(current_price * (1 - vol), 4), round(current_price, 4), round(current_price * (1 + vol), 4))
-
-        self.net.eval()
-        with torch.no_grad():
-            Xs = self.scaler.transform(X_hist)
-            if len(Xs) < self.seq_len:
-                pad = np.repeat(Xs[:1], self.seq_len - len(Xs), axis=0)
-                Xs = np.vstack([pad, Xs])
-            seq = torch.tensor(Xs[-self.seq_len:], dtype=torch.float32).unsqueeze(0).to(DEVICE)
-            p10_t, p50_t, p90_t = self.net(seq)
-            r10 = float(p10_t.cpu().item())
-            r50 = float(p50_t.cpu().item())
-            r90 = float(p90_t.cpu().item())
-
-            r10 = min(r10, r50 - 0.003)
-            r90 = max(r90, r50 + 0.003)
-            return (
-                round(current_price * (1.0 + r10), 4),
-                round(current_price * (1.0 + r50), 4),
-                round(current_price * (1.0 + r90), 4),
-            )
+        return _predict_dl_sequence_model(
+            self.net, self.scaler, X_hist, self.seq_len, current_price, horizon_bars, transpose_seq=False, fallback_vol=0.02
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -578,7 +647,7 @@ class XGBoostQuantileModel(BaseQuantModel):
     family = "Machine Learning"
     suitability = "All Asset Classes — Tabular Non-Linear Alpha"
 
-    def __init__(self, n_estimators: int = 50):
+    def __init__(self, n_estimators: int = 60):
         self.n_estimators = n_estimators
         self.models: Dict[str, Any] = {}
         self.feature_importances: Optional[np.ndarray] = None
@@ -586,13 +655,19 @@ class XGBoostQuantileModel(BaseQuantModel):
     def fit(self, X: np.ndarray, y: np.ndarray) -> None:
         if len(X) < 15:
             return
+        min_cw = max(3, min(10, len(X) // 12))
         for q_name, alpha in [("p10", 0.10), ("p50", 0.50), ("p90", 0.90)]:
             reg = xgb.XGBRegressor(
                 objective="reg:quantileerror",
                 quantile_alpha=alpha,
                 n_estimators=self.n_estimators,
                 max_depth=3,
-                learning_rate=0.06,
+                learning_rate=0.04,
+                reg_alpha=1.0,
+                reg_lambda=5.0,
+                subsample=0.8,
+                colsample_bytree=0.7,
+                min_child_weight=min_cw,
                 tree_method="hist",
                 random_state=42,
             )
@@ -636,8 +711,12 @@ class ExtraTreesHistGBDTModel(BaseQuantModel):
     suitability = "Choppy TSX Stocks, CDRs & Overfit Resistance"
 
     def __init__(self):
-        self.et = ExtraTreesRegressor(n_estimators=60, max_depth=6, min_samples_leaf=3, random_state=42)
-        self.hist_p50 = HistGradientBoostingRegressor(loss="quantile", quantile=0.50, max_iter=35, random_state=42)
+        self.et = ExtraTreesRegressor(
+            n_estimators=60, max_depth=5, min_samples_leaf=8, max_features=0.7, random_state=42
+        )
+        self.hist_p50 = HistGradientBoostingRegressor(
+            loss="quantile", quantile=0.50, max_iter=35, max_leaf_nodes=15, min_samples_leaf=10, l2_regularization=2.0, random_state=42
+        )
         self.is_fit = False
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> None:
@@ -685,14 +764,14 @@ class SVRBayesianRidgeModel(BaseQuantModel):
 
     def __init__(self):
         self.scaler = RobustScaler()
-        self.svr = SVR(kernel="rbf", C=2.0, epsilon=0.005)
+        self.svr = SVR(kernel="rbf", C=0.5, epsilon=0.008)
         self.bayes = BayesianRidge()
         self.is_fit = False
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> None:
         if len(X) < 15:
             return
-        Xs = self.scaler.fit_transform(X)
+        Xs = np.clip(self.scaler.fit_transform(X), -6.0, 6.0)
         self.svr.fit(Xs, y)
         self.bayes.fit(Xs, y)
         self.is_fit = True
@@ -707,7 +786,7 @@ class SVRBayesianRidgeModel(BaseQuantModel):
             vol = 0.015 * math.sqrt(horizon_bars / 5.0)
             return (round(current_price * (1 - vol), 4), round(current_price, 4), round(current_price * (1 + vol), 4))
 
-        Xs = self.scaler.transform(X_hist[-1:])
+        Xs = np.clip(self.scaler.transform(X_hist[-1:]), -6.0, 6.0)
         svr_r = float(self.svr.predict(Xs)[0])
         bayes_r, bayes_std = self.bayes.predict(Xs, return_std=True)
         r50 = float(0.6 * svr_r + 0.4 * bayes_r[0])
@@ -908,7 +987,7 @@ class ModelZooEngine:
         last_ts = str(df.index[-1]) if len(df) else "0"
         active_set = set(active_model_ids or cls.get_auto_models_for_asset(asset))
 
-        cache_key = f"{asset.symbol}_{df.index[0] if len(df) else 0}_{last_ts}_{horizon_bars}_{blending_mode}_{','.join(sorted(active_set))}"
+        cache_key = f"{asset.symbol}_{df.index[0] if len(df) else 0}_{last_ts}_{len(df)}_{horizon_bars}_{blending_mode}_{round(sentiment_score, 2)}_{','.join(sorted(active_set))}"
         if not force_retrain and cache_key in cls._cache:
             return cls._cache[cache_key]
 
@@ -916,6 +995,7 @@ class ModelZooEngine:
         feat_df, feat_cols = build_ml_feature_matrix(
             df, horizon_bars=horizon_bars, is_crypto=is_crypto, sentiment_score=sentiment_score
         )
+        denoise_meta = dict(feat_df.attrs.get("denoising_audit", {}))
 
         # Labeled rows exclude the last horizon_bars rows where future return is unknown
         N_total = len(df)
@@ -926,9 +1006,21 @@ class ModelZooEngine:
                 "consensus_p10": round(current_price - sp, 4),
                 "consensus_p50": round(current_price, 4),
                 "consensus_p90": round(current_price + sp, 4),
+                "exp_return_pct": 0.0,
                 "all_model_results": [],
                 "weights": {},
                 "feature_importance": [],
+                "val_naive_mape": 0.0,
+                "denoising_audit": {
+                    **denoise_meta,
+                    "embargo_gap_bars": horizon_bars,
+                    "avg_train_mape_pct": 0.0,
+                    "avg_val_mape_pct": 0.0,
+                    "overfit_ratio": 1.0,
+                    "overfit_status": "CALIBRATING",
+                    "ensemble_oos_skill_pct": 0.0,
+                    "gated_models_count": 0,
+                },
             }
 
         X_all = feat_df[feat_cols].values
@@ -948,10 +1040,18 @@ class ModelZooEngine:
 
         X_train = X_all[:train_end]
         y_train = y_all[:train_end]
+        # Winsorize target outliers strictly inside training fold only (never y_val)
+        q_lo, q_hi = np.percentile(y_train, [2.5, 97.5])
+        y_train_fit = np.clip(y_train, q_lo, q_hi)
 
         val_start = N_labeled - val_size
         val_indices = list(range(val_start, N_labeled))
         y_val = y_all[val_indices]
+
+        train_sample_start = min(20, max(1, train_end // 4))
+        train_sample_indices = np.linspace(
+            train_sample_start, max(train_sample_start, train_end - 1), min(25, max(1, train_end - train_sample_start)), dtype=int
+        )
 
         # Naive benchmark: random-walk prediction (pred_return = 0.0)
         naive_mape = float(np.mean(np.abs(y_val)) * 100.0)
@@ -965,10 +1065,18 @@ class ModelZooEngine:
         for mid in ALL_MODEL_IDS:
             model = create_model(mid)
             try:
-                model.fit(X_train, y_train)
+                model.fit(X_train, y_train_fit)
 
                 if mid == "ml_xgboost_quantile" and hasattr(model, "feature_importances"):
                     cached_xgb_importance = model.feature_importances
+
+                # Sample causal training error for Overfit Ratio audit
+                train_errors = []
+                for ti in train_sample_indices:
+                    X_up_to_ti = X_all[: int(ti) + 1]
+                    _, tr_p50, _ = model.predict_quantiles(X_up_to_ti, 1.0, horizon_bars)
+                    train_errors.append(abs((tr_p50 - 1.0) - y_all[int(ti)]))
+                train_mape = float(np.mean(np.array(train_errors) * 100.0)) if train_errors else naive_mape
 
                 # Evaluate on validation fold using true causal historical window ending at vi
                 val_preds_50 = []
@@ -976,15 +1084,13 @@ class ModelZooEngine:
                 val_errors = []
 
                 for vi in val_indices:
-                    # Feed causal history up to validation bar vi
                     X_up_to_vi = X_all[: vi + 1]
-                    p10, p50, p90 = model.predict_quantiles(X_up_to_vi, 1.0, horizon_bars)
+                    _, p50, _ = model.predict_quantiles(X_up_to_vi, 1.0, horizon_bars)
                     pred_r = p50 - 1.0
                     act_r = y_all[vi]
                     val_preds_50.append(pred_r)
                     val_errors.append(abs(pred_r - act_r))
 
-                    # Non-trivial directional hit: only count moves > 0.05%
                     if abs(act_r) > 0.0005:
                         val_hits.append(1.0 if np.sign(pred_r) == np.sign(act_r) else 0.0)
                     else:
@@ -993,12 +1099,14 @@ class ModelZooEngine:
                 mape = float(np.mean(np.array(val_errors) * 100.0))
                 hit_rate = float(np.mean(val_hits) * 100.0) if val_hits else 50.0
                 skill_pct = float((1.0 - (mape / max(naive_mape, 1e-4))) * 100.0)
+                overfit_ratio = round(mape / max(train_mape, 0.05), 2)
+                skill_gated = bool(skill_pct < -5.0)
+
                 val_preds_50_dict[mid] = np.array(val_preds_50)
                 val_res_errors_dict[mid] = val_errors
 
                 # Current forecast given full historical matrix X_all
                 c_p10, c_p50, c_p90 = model.predict_quantiles(X_all, current_price, horizon_bars)
-                # Enforce strict monotonicity
                 c_p10 = min(c_p10, c_p50 - current_price * 0.002)
                 c_p90 = max(c_p90, c_p50 + current_price * 0.002)
 
@@ -1012,8 +1120,11 @@ class ModelZooEngine:
                     "p50": round(c_p50, 4),
                     "p90": round(c_p90, 4),
                     "exp_return_pct": round(((c_p50 - current_price) / current_price) * 100.0, 2),
+                    "train_mape_pct": round(train_mape, 2),
                     "mape_pct": round(mape, 2),
+                    "overfit_ratio": overfit_ratio,
                     "skill_pct": round(skill_pct, 1),
+                    "skill_gated": skill_gated,
                     "hit_rate_pct": round(hit_rate, 1),
                     "is_active": mid in active_set,
                     "weight_pct": 0.0,
@@ -1031,8 +1142,11 @@ class ModelZooEngine:
                     "p50": round(current_price, 4),
                     "p90": round(current_price * (1 + vol), 4),
                     "exp_return_pct": 0.0,
+                    "train_mape_pct": round(naive_mape, 2),
                     "mape_pct": round(naive_mape, 2),
+                    "overfit_ratio": 1.0,
                     "skill_pct": 0.0,
+                    "skill_gated": False,
                     "hit_rate_pct": 50.0,
                     "is_active": mid in active_set,
                     "weight_pct": 0.0,
@@ -1056,29 +1170,54 @@ class ModelZooEngine:
                 weights = {m["model_id"]: float(raw_w[i] / w_sum) for i, m in enumerate(active_models)}
             except Exception:
                 weights = {m["model_id"]: 1.0 / k for m in active_models}
-        else:  # WALK_FORWARD (Inverse-MAPE softmax)
-            mapes = [max(m["mape_pct"], 0.1) for m in active_models]
+        else:  # WALK_FORWARD (Skill-gated Inverse-MAPE softmax)
+            non_gated = [m for m in active_models if not m.get("skill_gated", False)]
+            pool = non_gated if non_gated else active_models
+            mapes = [max(m["mape_pct"], 0.1) for m in pool]
             mean_m = float(np.mean(mapes))
             exp_factors = [math.exp(-1.2 * (m / mean_m)) for m in mapes]
-            tot_exp = sum(exp_factors)
-            weights = {m["model_id"]: exp_factors[i] / tot_exp for i, m in enumerate(active_models)}
+            tot_exp = sum(exp_factors) or 1.0
+            pool_weights = {pool[i]["model_id"]: exp_factors[i] / tot_exp for i in range(len(pool))}
+            weights = {m["model_id"]: float(pool_weights.get(m["model_id"], 0.0)) for m in active_models}
 
         # Update weight_pct on all_results
         for m in all_results:
             w = weights.get(m["model_id"], 0.0)
             m["weight_pct"] = round(w * 100.0, 1)
 
+        # Evaluate true weighted ensemble out-of-sample skill on validation fold
+        ens_preds = np.zeros(len(val_indices), dtype=float)
+        used_weight_sum = 0.0
+        for mid, w in weights.items():
+            if w > 0.0 and mid in val_preds_50_dict:
+                ens_preds += w * val_preds_50_dict[mid]
+                used_weight_sum += w
+        if used_weight_sum > 0.0:
+            ens_preds = ens_preds / used_weight_sum
+            ensemble_val_mape = float(np.mean(np.abs(ens_preds - y_val)) * 100.0)
+            ensemble_oos_skill_pct = round(float((1.0 - (ensemble_val_mape / max(naive_mape, 1e-4))) * 100.0), 1)
+        else:
+            ensemble_val_mape = naive_mape
+            ensemble_oos_skill_pct = 0.0
+
         # Consensus Quantiles
         cons_p50 = sum(m["p50"] * weights[m["model_id"]] for m in active_models)
         cons_p10 = sum(m["p10"] * weights[m["model_id"]] for m in active_models)
         cons_p90 = sum(m["p90"] * weights[m["model_id"]] for m in active_models)
 
+        # Shrink toward random walk if weighted ensemble fails to beat naive OOS
+        if ensemble_oos_skill_pct < 0.0:
+            cons_p50 = current_price + 0.25 * (cons_p50 - current_price)
+
         # Split Conformal Quantile Calibration (CQR)
-        # Compute non-conformity score E_i = |pred_i - actual_i|
         active_errors = []
         for m in active_models:
-            if m["model_id"] in val_res_errors_dict:
+            if weights.get(m["model_id"], 0.0) > 0.0 and m["model_id"] in val_res_errors_dict:
                 active_errors.extend(val_res_errors_dict[m["model_id"]])
+        if not active_errors:
+            for m in active_models:
+                if m["model_id"] in val_res_errors_dict:
+                    active_errors.extend(val_res_errors_dict[m["model_id"]])
         if active_errors:
             q_conformal = float(np.percentile(active_errors, 80)) * current_price * 0.4
         else:
@@ -1086,6 +1225,25 @@ class ModelZooEngine:
 
         cons_p10 = min(cons_p10 - q_conformal, cons_p50 - current_price * 0.004)
         cons_p90 = max(cons_p90 + q_conformal, cons_p50 + current_price * 0.004)
+
+        weighted_train_mape = sum(m["train_mape_pct"] * weights.get(m["model_id"], 0.0) for m in active_models)
+        if weighted_train_mape <= 0.0:
+            weighted_train_mape = float(np.mean([m["train_mape_pct"] for m in active_models]))
+        avg_val_mape_eff = ensemble_val_mape if used_weight_sum > 0.0 else float(np.mean([m["mape_pct"] for m in active_models]))
+        ens_overfit_ratio = round(avg_val_mape_eff / max(weighted_train_mape, 0.05), 2)
+        overfit_status = "HEALTHY" if ens_overfit_ratio <= 1.6 else ("WATCH" if ens_overfit_ratio <= 2.2 else "OVERFIT_GUARD")
+        gated_count = sum(1 for m in all_results if m.get("skill_gated"))
+
+        denoising_audit = {
+            **denoise_meta,
+            "embargo_gap_bars": int(embargo_gap),
+            "avg_train_mape_pct": round(float(weighted_train_mape), 2),
+            "avg_val_mape_pct": round(float(avg_val_mape_eff), 2),
+            "overfit_ratio": ens_overfit_ratio,
+            "overfit_status": overfit_status,
+            "ensemble_oos_skill_pct": ensemble_oos_skill_pct,
+            "gated_models_count": int(gated_count),
+        }
 
         # Feature Importance Extraction (Top 8 drivers)
         feat_imp_list = []
@@ -1101,7 +1259,6 @@ class ModelZooEngine:
                     "importance_pct": round(float(imp_scores[idx] / tot_imp) * 100.0, 1),
                 })
         else:
-            # Fallback correlation proxy
             corr_scores = [abs(float(np.corrcoef(X_train[:, i], y_train)[0, 1])) if np.std(X_train[:, i]) > 1e-6 else 0.0 for i in range(X_train.shape[1])]
             tot_c = sum(corr_scores) or 1.0
             sorted_indices = np.argsort(corr_scores)[::-1][:8]
@@ -1123,6 +1280,7 @@ class ModelZooEngine:
             "conformal_pad_pct": round((q_conformal / current_price) * 100.0, 2),
             "feature_importance": feat_imp_list,
             "val_naive_mape": round(naive_mape, 2),
+            "denoising_audit": denoising_audit,
         }
         cls._cache[cache_key] = res
         return res

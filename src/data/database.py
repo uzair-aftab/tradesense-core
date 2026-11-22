@@ -146,7 +146,7 @@ class DatabaseManager:
                 -- User Application Settings
                 CREATE TABLE IF NOT EXISTS user_settings (
                     user_id INTEGER PRIMARY KEY,
-                    active_ticker TEXT DEFAULT 'BTC-CAD',
+                    active_ticker TEXT DEFAULT 'BTC-USD',
                     active_strategy TEXT DEFAULT 'Ensemble Multi-Strategy Alpha',
                     timeframe TEXT DEFAULT '1d',
                     lookback TEXT DEFAULT '6mo',
@@ -217,13 +217,13 @@ class DatabaseManager:
                     accent_color TEXT DEFAULT '#38bdf8',
                     ws_tier TEXT DEFAULT 'Core',
                     usd_account_active INTEGER DEFAULT 0,
-                    active_symbol TEXT DEFAULT 'BTC-CAD',
+                    active_symbol TEXT DEFAULT 'BTC-USD',
                     active_timeframe TEXT DEFAULT '1h',
                     horizon_bars INTEGER DEFAULT 5,
                     model_preset TEXT DEFAULT 'AUTO_DNA',
                     selected_models_json TEXT DEFAULT '[]',
                     blending_mode TEXT DEFAULT 'WALK_FORWARD',
-                    use_proxy_route INTEGER DEFAULT 1,
+                    use_proxy_route INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     last_active_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
@@ -379,7 +379,7 @@ class DatabaseManager:
             conn.execute(
                 """
                 INSERT INTO user_settings (user_id, active_ticker, active_strategy)
-                VALUES (?, 'BTC-CAD', 'Ensemble Multi-Strategy Alpha')
+                VALUES (?, 'BTC-USD', 'Ensemble Multi-Strategy Alpha')
                 """,
                 (user_id,),
             )
@@ -727,7 +727,7 @@ class DatabaseManager:
             if row:
                 return dict(row)
             return {
-                "active_ticker": "BTC-CAD",
+                "active_ticker": "BTC-USD",
                 "active_strategy": "Ensemble Multi-Strategy Alpha",
                 "timeframe": "1d",
                 "lookback": "6mo",
@@ -745,7 +745,7 @@ class DatabaseManager:
     ) -> None:
         """Save user settings."""
         current = self.get_user_settings(user_id)
-        ticker = active_ticker or current.get("active_ticker", "BTC-CAD")
+        ticker = active_ticker or current.get("active_ticker", "BTC-USD")
         strat = active_strategy or current.get("active_strategy", "Ensemble Multi-Strategy Alpha")
         tf = timeframe or current.get("timeframe", "1d")
         lb = lookback or current.get("lookback", "6mo")
@@ -1030,13 +1030,13 @@ class DatabaseManager:
                     data.get("accent_color", "#38bdf8"),
                     data.get("ws_tier", "Core"),
                     1 if data.get("usd_account_active") else 0,
-                    data.get("active_symbol", "BTC-CAD"),
+                    data.get("active_symbol", "BTC-USD"),
                     data.get("active_timeframe", "1h"),
                     int(data.get("horizon_bars", 5)),
                     data.get("model_preset", "AUTO_DNA"),
                     data.get("selected_models_json", "[]"),
                     data.get("blending_mode", "WALK_FORWARD"),
-                    1 if data.get("use_proxy_route", 1) else 0,
+                    1 if data.get("use_proxy_route", 0) else 0,
                 ),
             )
 

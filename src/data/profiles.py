@@ -38,13 +38,13 @@ class UserProfile:
     accent_color: str = "#38bdf8"
     ws_tier: str = "Core"
     usd_account_active: bool = False
-    active_symbol: str = "BTC-CAD"
+    active_symbol: str = "BTC-USD"
     active_timeframe: str = "1h"
     horizon_bars: int = 5
     model_preset: str = "AUTO_DNA"
     selected_models: List[str] = field(default_factory=list)
     blending_mode: str = "WALK_FORWARD"
-    use_proxy_route: bool = True
+    use_proxy_route: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -68,13 +68,13 @@ class UserProfile:
             accent_color=row.get("accent_color", "#38bdf8"),
             ws_tier=row.get("ws_tier", "Core"),
             usd_account_active=bool(row.get("usd_account_active", 0)),
-            active_symbol=row.get("active_symbol", "BTC-CAD"),
+            active_symbol=row.get("active_symbol", "BTC-USD"),
             active_timeframe=row.get("active_timeframe", "1h"),
             horizon_bars=int(row.get("horizon_bars", 5)),
             model_preset=row.get("model_preset", "AUTO_DNA"),
             selected_models=models,
             blending_mode=row.get("blending_mode", "WALK_FORWARD"),
-            use_proxy_route=bool(row.get("use_proxy_route", 1)),
+            use_proxy_route=bool(row.get("use_proxy_route", 0)),
         )
 
 
@@ -100,17 +100,22 @@ class ProfileManager:
                     "accent_color": color,
                     "ws_tier": tier,
                     "usd_account_active": 0,
-                    "active_symbol": "BTC-CAD",
+                    "active_symbol": "BTC-USD",
                     "active_timeframe": "1h",
                     "horizon_bars": 5,
                     "model_preset": "AUTO_DNA",
                     "selected_models_json": "[]",
                     "blending_mode": "WALK_FORWARD",
-                    "use_proxy_route": 1,
+                    "use_proxy_route": 0,
                 })
                 # Ensure isolated virtual trading wallet
                 self.db.get_or_create_virtual_account(pid, starting_cash=10000.0, ws_tier=tier)
                 logger.info("Created default profile: %s", name)
+            elif str(existing.get("active_symbol", "")).endswith("-CAD"):
+                # Migrate legacy CAD crypto default to USD-first pricing
+                new_sym = existing["active_symbol"][:-4] + "-USD"
+                self.update_profile(pid, active_symbol=new_sym, use_proxy_route=False)
+                logger.info("Migrated profile %s active_symbol to USD: %s", pid, new_sym)
 
     def list_profiles(self) -> List[UserProfile]:
         """List all available profiles."""
@@ -168,13 +173,13 @@ class ProfileManager:
             accent_color=color,
             ws_tier=ws_tier,
             usd_account_active=False,
-            active_symbol="BTC-CAD",
+            active_symbol="BTC-USD",
             active_timeframe="1h",
             horizon_bars=5,
             model_preset="AUTO_DNA",
             selected_models=[],
             blending_mode="WALK_FORWARD",
-            use_proxy_route=True,
+            use_proxy_route=False,
         )
 
         self.db.save_user_profile(profile.to_dict())
